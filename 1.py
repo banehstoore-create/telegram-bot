@@ -149,4 +149,7 @@ def other(message):
     bot.send_message(message.chat.id, "👇 لطفاً از دکمه‌های منو استفاده کنید")
 
 # ================== اجرای ربات ==================
-bot.infinity_polling()
+bot.infinity_polling(
+    timeout=20,
+    long_polling_timeout=20
+)

@@ -7,7 +7,7 @@ import re
 # ================== تنظیمات ==================
 import os
 
-BOT_TOKEN = os.getenv("8583608724:AAEeqgf5ki7fp_OuA07HZD2J0pVdWFONeSY")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = "@banehstoore"
 WHATSAPP = "09180514202"
 ADMIN_ID = 6690559792  # آیدی عددی تلگرام خودت

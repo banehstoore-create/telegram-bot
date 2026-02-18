@@ -3,7 +3,8 @@ from telebot import types
 import requests
 from bs4 import BeautifulSoup
 import re
-
+from keep_alive import keep_alive
+keep_alive()
 # ================== تنظیمات ==================
 import os
 

@@ -3,154 +3,162 @@ from telebot import types
 import requests
 from bs4 import BeautifulSoup
 import re
-from keep_alive import keep_alive
-keep_alive()
-# ================== تنظیمات ==================
 import os
+from flask import Flask, request
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+# ================== تنظیمات ==================
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHANNEL_ID = "@banehstoore"
 WHATSAPP = "09180514202"
-ADMIN_ID = 6690559792  # آیدی عددی تلگرام خودت
+ADMIN_ID = 6690559792 # آیدی عددی شما
 
-bot = telebot.TeleBot(BOT_TOKEN)
+bot = telebot.TeleBot(BOT_TOKEN, threaded=True)
+app = Flask(__name__)
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0"
-}
+HEADERS = {"User-Agent": "Mozilla/5.0"}
 
-# ================== منوی شروع ==================
+# ================== شروع و ثبت‌نام ==================
 @bot.message_handler(commands=['start'])
 def start(message):
+    msg = bot.send_message(
+        message.chat.id,
+        "👋 به ربات فروشگاه بانه استور خوش آمدید\n\n"
+        "لطفاً جهت دسترسی به خدمات، ابتدا **نام و نام خانوادگی** خود را ارسال کنید:",
+        parse_mode="Markdown"
+    )
+    # هدایت کاربر به مرحله دریافت نام
+    bot.register_next_step_handler(msg, get_full_name)
+
+def get_full_name(message):
+    user_name = message.text
+    if not user_name or len(user_name) < 3:
+        msg = bot.send_message(message.chat.id, "❌ لطفاً یک نام معتبر وارد کنید:")
+        bot.register_next_step_handler(msg, get_full_name)
+        return
+
+    # درخواست شماره تماس با دکمه شیشه‌ای یا کیبورد
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    button = types.KeyboardButton("📲 اشتراک‌گذاری شماره موبایل", request_contact=True)
+    markup.add(button)
+
+    msg = bot.send_message(
+        message.chat.id,
+        f"ممنون {user_name} عزیز. حالا برای تکمیل ثبت‌نام، روی دکمه زیر کلیک کنید تا شماره تماس شما تایید شود:",
+        reply_markup=markup
+    )
+    bot.register_next_step_handler(msg, get_phone, user_name)
+
+def get_phone(message, user_name):
+    # چک می‌کنیم که آیا کاربر شماره را فرستاده یا متن تایپ کرده
+    if message.contact is not None:
+        phone = message.contact.phone_number
+    else:
+        phone = message.text # اگر دستی تایپ کرد
+
+    # --- ارسال گزارش برای ادمین ---
+    admin_msg = f"""
+👤 **مشتری جدید ثبت‌نام کرد!**
+---------------------------
+📝 نام: {user_name}
+📞 شماره: {phone}
+🆔 آیدی: `{message.from_user.id}`
+🔗 یوزرنیم: @{message.from_user.username if message.from_user.username else "ندارد"}
+"""
+    bot.send_message(ADMIN_ID, admin_msg, parse_mode="Markdown")
+
+    # --- نمایش منوی اصلی به کاربر ---
+    show_main_menu(message.chat.id, user_name)
+
+def show_main_menu(chat_id, user_name):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add("🛒 محصولات", "📞 پشتیبانی")
-
+    
     bot.send_message(
-        message.chat.id,
-        "👋 به ربات فروشگاه بانه استور خوش آمدید\n"
-        "لطفاً از منوی زیر استفاده کنید:",
+        chat_id,
+        f"✅ ثبت‌نام شما با موفقیت انجام شد.\n"
+        "حالا می‌توانید از منوی زیر استفاده کنید:",
         reply_markup=markup
     )
 
-# ================== پشتیبانی ==================
+# ================== پشتیبانی و محصولات ==================
 @bot.message_handler(func=lambda m: m.text == "📞 پشتیبانی")
 def support(message):
     markup = types.InlineKeyboardMarkup(row_width=2)
-
-    wa = types.InlineKeyboardButton(
-        "📲 واتساپ",
-        url="https://wa.me/98" + WHATSAPP[1:]
+    markup.add(
+        types.InlineKeyboardButton("📲 واتساپ", url="https://wa.me/98" + WHATSAPP[1:]),
+        types.InlineKeyboardButton("💬 تلگرام ادمین", url=f"tg://user?id={ADMIN_ID}")
     )
-    tg = types.InlineKeyboardButton(
-        "💬 تلگرام",
-        url="https://t.me/share/url?text=سلام،%20برای%20پشتیبانی%20پیام%20می‌دهم"
-    )
+    bot.send_message(message.chat.id, "📞 راه‌های ارتباطی با ما:", reply_markup=markup)
 
-    markup.add(wa, tg)
-
-    bot.send_message(
-        message.chat.id,
-        "📞 ارتباط با پشتیبانی بانه استور:",
-        reply_markup=markup
-    )
-
-# ================== دسته‌بندی محصولات ==================
 @bot.message_handler(func=lambda m: m.text == "🛒 محصولات")
 def products(message):
     markup = types.InlineKeyboardMarkup(row_width=2)
-
     markup.add(
         types.InlineKeyboardButton("☕ اسپرسوساز", url="https://banehstoore.ir/product-category/espresso-maker"),
         types.InlineKeyboardButton("🍟 سرخ‌کن", url="https://banehstoore.ir/product-category/air-fryer"),
-        types.InlineKeyboardButton("🥘 لوازم پخت‌وپز", url="https://banehstoore.ir/product-category/cookware"),
         types.InlineKeyboardButton("🧹 جاروبرقی", url="https://banehstoore.ir/product-category/vacuum-cleaner"),
-        types.InlineKeyboardButton("🍲 غذاساز و خردکن", url="https://banehstoore.ir/product-category/food-processor"),
-        types.InlineKeyboardButton("🔥 سماور برقی", url="https://banehstoore.ir/product-category/electric-samovar"),
-        types.InlineKeyboardButton("🛍 مشاهده همه محصولات", url="https://banehstoore.ir")
+        types.InlineKeyboardButton("🍲 غذاساز", url="https://banehstoore.ir/product-category/food-processor"),
+        types.InlineKeyboardButton("🛍 مشاهده کل سایت", url="https://banehstoore.ir")
     )
+    bot.send_message(message.chat.id, "🛒 دسته‌بندی محصولات بانه استور:", reply_markup=markup)
 
-    bot.send_message(
-        message.chat.id,
-        "🛒 دسته‌بندی محصولات بانه استور:",
-        reply_markup=markup
-    )
-
-# ================== دریافت اطلاعات محصول ==================
+# ================== استخراج اطلاعات محصول (Scraper) ==================
 def fetch_product(url):
     r = requests.get(url, headers=HEADERS, timeout=15)
     soup = BeautifulSoup(r.text, "html.parser")
 
     title = soup.find("h1").get_text(strip=True)
-
+    
+    # پیدا کردن تصویر
     image = None
     og = soup.find("meta", property="og:image")
-    if og:
-        image = og.get("content")
+    if og: image = og.get("content")
 
+    # قیمت هوشمند (برای ووکامرس)
     price = "تماس بگیرید"
-    for span in soup.find_all("span"):
-        txt = span.get_text(strip=True).replace(",", "")
-        if txt.isdigit() and len(txt) >= 5:
-            price = span.get_text(strip=True) + " تومان"
-            break
+    price_tag = soup.find("p", class_="price")
+    if price_tag:
+        price = price_tag.get_text(strip=True)
 
-    stock = "✅ موجود"
+    stock = "✅ موجود در انبار"
     if "ناموجود" in soup.text:
         stock = "❌ ناموجود"
 
     return title, image, price, stock
 
-# ================== دریافت لینک محصول و ارسال به کانال ==================
-@bot.message_handler(func=lambda m: m.from_user.id == ADMIN_ID and re.search(r'https?://banehstoore.ir', m.text or ""))
+# ================== ارسال محصول به کانال (فقط ادمین) ==================
+@bot.message_handler(func=lambda m: m.from_user.id == ADMIN_ID and "banehstoore.ir/product/" in (m.text or ""))
 def handle_product_link(message):
-    bot.send_message(message.chat.id, "⏳ در حال پردازش لینک محصول...")
-
+    wait_msg = bot.send_message(message.chat.id, "⏳ در حال استخراج اطلاعات محصول...")
     try:
         title, image, price, stock = fetch_product(message.text)
 
-        caption = f"""
-🛍 **{title}**
+        caption = f"🛍 *{title}*\n\n💰 قیمت: {price}\n📦 وضعیت: {stock}\n\n🚚 ارسال به سراسر کشور\n💯 ضمانت اصالت کالا"
 
-💰 قیمت: {price}
-📦 وضعیت: {stock}
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("🛒 خرید آنلاین", url=message.text))
+        markup.add(types.InlineKeyboardButton("📲 سفارش در واتساپ", url=f"https://wa.me/98{WHATSAPP[1:]}"))
 
-🚚 ارسال سریع به سراسر کشور  
-💯 ضمانت اصالت کالا  
-🤝 خرید مطمئن از بانه استور
-"""
+        bot.send_photo(CHANNEL_ID, image, caption=caption, parse_mode="Markdown", reply_markup=markup)
+        bot.delete_message(message.chat.id, wait_msg.message_id)
+        bot.send_message(message.chat.id, "✅ محصول در کانال منتشر شد.")
+    except Exception as e:
+        bot.send_message(message.chat.id, f"❌ خطا در پردازش: {str(e)}")
 
-        keyboard = {
-            "inline_keyboard": [
-                [
-                    {"text": "🛒 خرید محصول", "url": message.text},
-                    {"text": "📲 تماس در واتساپ", "url": f"https://wa.me/98{WHATSAPP[1:]}"}
-                ]
-            ]
-        }
+# ================== Webhook Setup ==================
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    if request.headers.get('content-type') == 'application/json':
+        json_string = request.get_data().decode('utf-8')
+        update = telebot.types.Update.de_json(json_string)
+        bot.process_new_updates([update])
+        return ''
+    else:
+        return "Forbidden", 403
 
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
-        data = {
-            "chat_id": CHANNEL_ID,
-            "photo": image,
-            "caption": caption,
-            "parse_mode": "Markdown",
-            "reply_markup": keyboard
-        }
+@app.route('/')
+def home():
+    return "Baneh Store Bot is Active!", 200
 
-        requests.post(url, json=data)
-
-        bot.send_message(message.chat.id, "✅ محصول با موفقیت در کانال منتشر شد")
-
-    except Exception:
-        bot.send_message(message.chat.id, "❌ خطا در پردازش یا ارسال محصول")
-
-# ================== پیام‌های متفرقه ==================
-@bot.message_handler(func=lambda m: True)
-def other(message):
-    bot.send_message(message.chat.id, "👇 لطفاً از دکمه‌های منو استفاده کنید")
-
-# ================== اجرای ربات ==================
-bot.infinity_polling(
-    timeout=20,
-    long_polling_timeout=20
-)
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))

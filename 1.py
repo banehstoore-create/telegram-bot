@@ -39,28 +39,66 @@ def save_user(user_id):
 # برای جلوگیری از ارسال پیام تکراری از سایت
 last_seen_customer_id = None
 
-# ================== مانیتورینگ سایت میکسین ==================
+# ================== تابع مانیتورینگ سایت (نسخه اصلاح شده) ==================
 def monitor_mixin_site():
     global last_seen_customer_id
+    # یکبار پیام میدهد که بفهمید مانیتورینگ استارت خورده
+    try:
+        bot.send_message(ADMIN_ID, "🚀 سیستم مانیتورینگ سایت بانه استور فعال شد.\nهر ۵ دقیقه سایت چک می‌شود.")
+    except:
+        pass
+    
     while True:
         try:
-            headers = {"Authorization": f"Api-Key {MIXIN_API_KEY}"}
-            response = requests.get(MIXIN_API_URL, headers=headers, timeout=20)
+            headers = {
+                "Authorization": f"Api-Key {MIXIN_API_KEY}",
+                "Accept": "application/json"
+            }
+            # اضافه کردن پارامتر برای اطمینان از دریافت جدیدترین‌ها
+            response = requests.get(MIXIN_API_URL, headers=headers, timeout=25)
+            
             if response.status_code == 200:
                 data = response.json()
+                # میکسین معمولا داده ها را در 'results' میفرستد
                 customers = data.get('results', [])
+                
                 if customers:
-                    latest = customers[0]
-                    current_id = latest.get('id')
-                    if last_seen_customer_id is not None and current_id > last_seen_customer_id:
-                        name = f"{latest.get('first_name', '')} {latest.get('last_name', '')}"
-                        phone = latest.get('phone_number', 'نامشخص')
-                        bot.send_message(ADMIN_ID, f"🆕 **ثبت‌نام جدید در سایت!**\n👤 نام: {name}\n📞 شماره: {phone}")
-                    last_seen_customer_id = current_id
-        except: pass
-        time.sleep(300)
+                    # گرفتن اولین نفر (جدیدترین)
+                    latest_customer = customers[0]
+                    current_id = latest_customer.get('id')
+                    
+                    if last_seen_customer_id is None:
+                        # در اجرای اول فقط آیدی فعلی را ذخیره کن
+                        last_seen_customer_id = current_id
+                        print(f"Initial ID set to: {current_id}")
+                    
+                    elif current_id > last_seen_customer_id:
+                        # اگر آیدی بزرگتر شد یعنی مشتری واقعا جدید است
+                        first_name = latest_customer.get('first_name', '')
+                        last_name = latest_customer.get('last_name', '')
+                        phone = latest_customer.get('phone_number', 'بدون شماره')
+                        
+                        report = f"""
+🆕 **ثبت‌نام جدید در سایت بانه استور!**
+---------------------------
+👤 نام: {first_name} {last_name}
+📞 شماره: {phone}
+🆔 آیدی سیستمی: {current_id}
+---------------------------
+"""
+                        bot.send_message(ADMIN_ID, report)
+                        last_seen_customer_id = current_id
+            else:
+                print(f"Mixin Error: {response.status_code}")
+                # اگر توکن اشتباه باشد اینجا متوجه میشوید
+                if response.status_code == 401:
+                    bot.send_message(ADMIN_ID, "⚠️ اخطار: توکن سایت (Mixin API Key) معتبر نیست!")
 
-threading.Thread(target=monitor_mixin_site, daemon=True).start()
+        except Exception as e:
+            print(f"Monitoring Loop Error: {e}")
+            
+        # زمان انتظار (۳۰۰ ثانیه = ۵ دقیقه)
+        time.sleep(300)
 
 # ================== بخش ربات تلگرام ==================
 

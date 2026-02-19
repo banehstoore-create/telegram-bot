@@ -8,20 +8,26 @@ import time
 import json
 from flask import Flask, request
 
-# ================== تنظیمات اصلی (بدون تغییر) ==================
+# ================== تنظیمات اصلی (ثابت) ==================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_ID = 6690559792 
 CHANNEL_ID = "@banehstoore"
 WHATSAPP = "09180514202"
 
-# توکن شما و آدرس دقیق طبق مستندات میکسین
+# توکن شما
 MIXIN_API_KEY = "XfixI1ex7mrBCtJDX1NvopQ0lFOQJjQ9cmdZd5tBCARMaOsLKzzsgHj-GZtTDtkenCq0TSf4WTWEJoqclEQqLQ"
-MIXIN_API_URL = "https://banehstoore.ir/api/management/v1/customers/"
+
+# آدرس‌های احتمالی برای دریافت لیست کاربران
+API_URLS = [
+    "https://banehstoore.ir/api/management/v1/customers/",
+    "https://banehstoore.ir/api/v1/users/",
+    "https://banehstoore.ir/api/v1/customers/"
+]
 
 bot = telebot.TeleBot(BOT_TOKEN, threaded=True)
 app = Flask(__name__)
 
-# ================== مدیریت کاربران تلگرام ==================
+# ================== مدیریت دیتابیس کاربران تلگرام ==================
 USERS_FILE = "registered_users.json"
 if os.path.exists(USERS_FILE):
     with open(USERS_FILE, "r") as f: registered_users = json.load(f)
@@ -32,7 +38,7 @@ def save_user(user_id):
         registered_users.append(user_id)
         with open(USERS_FILE, "w") as f: json.dump(registered_users, f)
 
-# ================== مانیتورینگ سایت بانه استور ==================
+# ================== مانیتورینگ هوشمند سایت ==================
 last_customer_count = None
 monitor_started = False 
 
@@ -40,53 +46,57 @@ def monitor_mixin_site():
     global last_customer_count, monitor_started
     monitor_started = True
     
-    bot.send_message(ADMIN_ID, "🔍 مانیتورینگ مجدداً استارت خورد. در حال فراخوانی اطلاعات از banehstoore.ir...")
+    bot.send_message(ADMIN_ID, "🔍 مانیتورینگ بانه استور بیدار شد.\nدر حال جستجوی لیست مشتریان در دیتابیس سایت...")
     
     while True:
-        try:
-            headers = {
-                "Authorization": f"Api-Key {MIXIN_API_KEY}",
-                "Accept": "application/json"
-            }
-            response = requests.get(MIXIN_API_URL, headers=headers, timeout=25)
-            
-            if response.status_code == 200:
-                data = response.json()
-                # بررسی فیلد results طبق مستندات میکسین
-                customers = data.get('results', [])
-                current_count = data.get('count', 0)
+        success = False
+        for url in API_URLS:
+            try:
+                headers = {
+                    "Authorization": f"Api-Key {MIXIN_API_KEY}",
+                    "Accept": "application/json"
+                }
+                response = requests.get(url, headers=headers, timeout=15)
                 
-                if last_customer_count is None:
-                    last_customer_count = current_count
-                    status_msg = f"✅ اتصال موفقیت‌آمیز بود.\nتعداد مشتریان یافت شده: {current_count}"
-                    if current_count == 0:
-                        status_msg += "\n\n⚠️ هشدار: تعداد ۰ است! لطفاً در پنل میکسین چک کنید که کلید API دسترسی 'مشاهده مشتریان' را داشته باشد."
-                    bot.send_message(ADMIN_ID, status_msg)
-                
-                elif current_count > last_customer_count:
-                    if customers:
-                        latest = customers[0]
-                        name = f"{latest.get('first_name', '')} {latest.get('last_name', '')}"
-                        phone = latest.get('phone_number', 'نامشخص')
-                        bot.send_message(ADMIN_ID, f"🆕 **ثبت‌نام جدید در سایت!**\n---------------------------\n👤 نام: {name}\n📞 شماره: {phone}\n---------------------------")
-                    last_customer_count = current_count
-            else:
-                bot.send_message(ADMIN_ID, f"❌ خطای سایت: {response.status_code}\nاحتمالاً آدرس یا توکن اشتباه است.")
-                
-        except Exception as e:
-            print(f"Error: {e}")
+                if response.status_code == 200:
+                    data = response.json()
+                    # بررسی فیلدهای مختلف که ممکن است لیست در آن‌ها باشد
+                    customers = data.get('results', data.get('data', data.get('users', [])))
+                    current_count = data.get('count', len(customers))
+                    
+                    if current_count > 0 or last_customer_count is not None:
+                        if last_customer_count is None:
+                            last_customer_count = current_count
+                            bot.send_message(ADMIN_ID, f"✅ اتصال با موفقیت برقرار شد!\nتعداد مشتریان شناسایی شده: {current_count}\nآدرس فعال: {url}")
+                        
+                        elif current_count > last_customer_count:
+                            if customers:
+                                latest = customers[0]
+                                name = f"{latest.get('first_name', '')} {latest.get('last_name', '')}"
+                                phone = latest.get('phone_number', latest.get('mobile', 'نامشخص'))
+                                bot.send_message(ADMIN_ID, f"🆕 **ثبت‌نام جدید در سایت!**\n---------------------------\n👤 نام: {name}\n📞 شماره: {phone}\n---------------------------")
+                            last_customer_count = current_count
+                        
+                        success = True
+                        break # اگر این آدرس جواب داد، بقیه را چک نکن
+            except:
+                continue
+        
+        if not success and last_customer_count is None:
+            # اگر هیچ آدرسی دیتا نداشت
+            print("No valid data found in provided URLs.")
             
         time.sleep(300)
 
-# ================== بخش ربات تلگرام (ثابت و حفظ شده) ==================
+# ================== بخش ربات تلگرام (ثابت) ==================
 def main_menu():
     m = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    m.add("🛒 محصولات", "📞 پشتیبانی")
-    return m
+    m.add("🛒 محصولات", "📞 پشتیبانی"); return m
 
 @bot.message_handler(commands=['start'])
 def start(message):
-    if message.from_user.id in registered_users:
+    user_id = message.from_user.id
+    if user_id in registered_users:
         bot.send_message(message.chat.id, "👋 به فروشگاه بانه استور خوش آمدید.", reply_markup=main_menu())
     else:
         msg = bot.send_message(message.chat.id, "👋 خوش آمدید! لطفاً نام و نام خانوادگی خود را وارد کنید:")
@@ -102,7 +112,7 @@ def get_name(message):
 def get_phone(message, name):
     phone = message.contact.phone_number if message.contact else message.text
     save_user(message.from_user.id)
-    bot.send_message(ADMIN_ID, f"👤 **مشتری جدید تلگرام!**\n📝 نام: {name}\n📞 شماره: {phone}")
+    bot.send_message(ADMIN_ID, f"👤 **مشتری جدید تلگرام!**\n📝 نام: {name}\n📞 شماره: {phone}\n🆔 آیدی: `{message.from_user.id}`")
     bot.send_message(message.chat.id, "✅ ثبت‌نام شما با موفقیت انجام شد.", reply_markup=main_menu())
 
 @bot.message_handler(func=lambda m: m.text == "📞 پشتیبانی")
@@ -119,7 +129,7 @@ def products(message):
         types.InlineKeyboardButton("🍟 سرخ‌کن", url="https://banehstoore.ir/product-category/air-fryer"),
         types.InlineKeyboardButton("🛍 مشاهده همه", url="https://banehstoore.ir")
     )
-    bot.send_message(message.chat.id, "محصولات بانه استور:", reply_markup=markup)
+    bot.send_message(message.chat.id, "🛒 محصولات بانه استور:", reply_markup=markup)
 
 # ================== وب‌هوک و اجرا ==================
 @app.route('/' + BOT_TOKEN, methods=['POST'])

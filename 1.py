@@ -15,7 +15,7 @@ CHANNEL_ID = "@banehstoore"
 WHATSAPP = "09180514202"
 
 MIXIN_API_KEY = "XfixI1ex7mrBCtJDX1NvopQ0lFOQJjQ9cmdZd5tBCARMaOsLKzzsgHj-GZtTDtkenCq0TSf4WTWEJoqclEQqLQ"
-MIXIN_API_URL = "https://banehstoore.ir/api/management/v1/customers/"
+MIXIN_API_URL = "https://banehstoore.ir/api/management/v1/users/"
 
 bot = telebot.TeleBot(BOT_TOKEN, threaded=True)
 app = Flask(__name__)

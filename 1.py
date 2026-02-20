@@ -9,103 +9,108 @@ from flask import Flask, request
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 API_KEY = "uc1_B9-8fkDfMguDhPDdDyWztzJJt6kHA_foPc4tJYp3x-_kGPGFNsirga_uwtcBPXQ5lejaooZnlZ6ryyyxsw"
 RENDER_URL = "https://telegram-bot-6-1qt1.onrender.com"
-ADMIN_ID = 6690559792
 
 bot = telebot.TeleBot(BOT_TOKEN, threaded=True)
 app = Flask(__name__)
 
-# ================== تابع استخراج کامل جزئیات فاکتور ==================
-def get_full_invoice_details(order_id):
+# ذخیره موقت وضعیت کاربران (در دیتابیس واقعی بهتر است)
+user_data = {}
+
+# ================== تابع اصلی استخراج فاکتور ==================
+def get_full_invoice_details(order_id, phone):
     try:
-        # آدرس مستقیم فاکتور در سایت شما
-        url = f"https://banehstoore.ir/profile/order-details/{order_id}/"
+        # آدرس پیگیری مستقیم با پارامترهای شناسایی
+        url = f"https://banehstoore.ir/order-tracking/?order_id={order_id}&phone={phone}"
         
-        # استفاده از API Key برای احراز هویت در صورت پشتیبانی سایت، 
-        # یا شبیه‌سازی دسترسی مدیریت برای خواندن محتوا
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Authorization": f"Bearer {API_KEY}"
         }
         
         response = requests.get(url, headers=headers, timeout=20)
-        if response.status_code != 200:
-            return "❌ متأسفانه امکان دسترسی مستقیم به این فاکتور وجود ندارد."
-
         soup = BeautifulSoup(response.text, "html.parser")
         
-        # --- استخراج اطلاعات مشتری ---
-        customer_info = ""
-        # در میکسین معمولا اطلاعات در کلاس order-details-customer یا مشابه قرار دارد
-        customer_div = soup.find(class_=lambda x: x and 'customer' in x)
-        if customer_div:
-            customer_info = customer_div.get_text(strip=True, separator=" ")
-
-        # --- استخراج لیست محصولات و قیمت‌ها ---
-        items_text = ""
-        # یافتن جدول محصولات
-        table = soup.find('table')
-        if table:
-            rows = table.find_all('tr')[1:] # نادیده گرفتن سرتیتر جدول
-            for row in rows:
-                cols = row.find_all('td')
-                if len(cols) >= 2:
-                    p_name = cols[0].get_text(strip=True)
-                    p_price = cols[-1].get_text(strip=True)
-                    items_text += f"🛍 **{p_name}**\n💰 قیمت: {p_price}\n\n"
+        # استخراج متن اصلی فاکتور
+        # در اینجا ربات تمام متن‌های داخل باکس فاکتور را جارو می‌کند
+        invoice_box = soup.find(class_=lambda x: x and ('order' in x or 'tracking' in x or 'invoice' in x))
         
-        # --- استخراج وضعیت و جمع کل ---
-        summary_text = ""
-        summary_div = soup.find(class_=lambda x: x and 'summary' in x)
-        if summary_div:
-            summary_text = summary_div.get_text(strip=True, separator="\n")
+        if not invoice_box:
+            return "❌ متأسفانه فاکتوری با این مشخصات یافت نشد. لطفاً شماره سفارش یا شماره موبایل را بررسی کنید."
 
-        # --- ساخت پیام نهایی ---
-        report = f"📑 **فاکتور کامل سفارش شماره {order_id}**\n"
+        # تمیز کردن متن برای نمایش شکیل
+        raw_text = invoice_box.get_text(separator="\n", strip=True)
+        
+        # ساخت فاکتور نهایی
+        report = f"🧾 **فاکتور کامل بانه استور (تأیید شده)**\n"
         report += "━━━━━━━━━━━━━━━\n"
-        if customer_info:
-            report += f"👤 **مشخصات خریدار:**\n{customer_info}\n\n"
+        report += raw_text
+        report += "\n━━━━━━━━━━━━━━━\n"
+        report += "✅ این اطلاعات مستقیماً از سایت فراخوانی شده است."
         
-        report += "🛒 **لیست اقلام سفارش:**\n"
-        report += items_text if items_text else "اطلاعات محصولات یافت نشد.\n"
-        
-        report += "━━━━━━━━━━━━━━━\n"
-        if summary_text:
-            report += f"📊 **خلاصه وضعیت و پرداخت:**\n{summary_text}\n"
-        else:
-            # تلاش ثانویه برای یافتن قیمت کل در صورت نبود جدول خلاصه
-            total_price = soup.find(string=lambda x: x and 'تومان' in x)
-            if total_price:
-                report += f"💰 **مبلغ کل:** {total_price.strip()}\n"
-
-        report += "\n✅ **بانه استور - خرید بدون واسطه**"
         return report
 
     except Exception as e:
-        return f"⚠️ خطا در پردازش اطلاعات. لطفا از لینک زیر استفاده کنید:\n{url}"
+        return "⚠️ در حال حاضر ارتباط با سایت برقرار نشد. لطفاً لحظاتی دیگر تلاش کنید."
 
-# ================== هندلر پیگیری سفارش ==================
+# ================== مراحل پیگیری سفارش (تأیید شماره موبایل) ==================
+
 @bot.message_handler(func=lambda m: m.text == "📦 پیگیری سفارش")
-def track_start(message):
-    msg = bot.send_message(message.chat.id, "🔢 لطفاً شماره سفارش خود را وارد کنید تا فاکتور کامل نمایش داده شود:")
-    bot.register_next_step_handler(msg, process_full_invoice)
+def ask_phone(message):
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    # ایجاد دکمه ارسال شماره موبایل
+    btn = types.KeyboardButton("📲 ارسال و تأیید شماره موبایل", request_contact=True)
+    markup.add(btn)
+    
+    msg = bot.send_message(message.chat.id, 
+                           "🔐 برای مشاهده جزئیات فاکتور، ابتدا باید شماره موبایل خود را تأیید کنید.\n\nلطفاً روی دکمه زیر کلیک کنید:", 
+                           reply_markup=markup)
+    bot.register_next_step_handler(msg, get_phone_and_ask_order)
 
-def process_full_invoice(message):
-    order_id = message.text.strip()
-    if order_id.isdigit():
-        bot.send_message(message.chat.id, "⏳ در حال استخراج تمام جزئیات فاکتور از سایت... لطفاً شکیبا باشید.")
+def get_phone_and_ask_order(message):
+    if message.contact:
+        phone = message.contact.phone_number
+        # حذف +98 یا 0098 از ابتدای شماره برای هماهنگی با سایت
+        if phone.startswith('+98'): phone = '0' + phone[3:]
+        if phone.startswith('98'): phone = '0' + phone[2:]
         
-        invoice_content = get_full_invoice_details(order_id)
-        bot.send_message(message.chat.id, invoice_content, parse_mode="Markdown")
+        user_data[message.chat.id] = {'phone': phone}
+        
+        # حذف کیبورد قبلی و پرسیدن شماره سفارش
+        markup = types.ReplyKeyboardRemove()
+        msg = bot.send_message(message.chat.id, 
+                               f"✅ شماره `{phone}` تأیید شد.\n\n🔢 حالا لطفاً **شماره سفارش** خود را وارد کنید:", 
+                               reply_markup=markup, parse_mode="Markdown")
+        bot.register_next_step_handler(msg, final_invoice_step)
     else:
-        bot.send_message(message.chat.id, "❌ خطا! شماره سفارش باید فقط عدد باشد.")
+        # اگر کاربر دکمه را نزد و متن فرستاد
+        bot.send_message(message.chat.id, "❌ خطا! شما باید حتماً روی دکمه 'ارسال شماره موبایل' کلیک کنید.", reply_markup=get_main_keyboard())
 
-# ================== سایر بخش‌ها (بدون تغییر) ==================
-@bot.message_handler(commands=['start'])
-def start(message):
+def final_invoice_step(message):
+    order_id = message.text.strip()
+    chat_id = message.chat.id
+    
+    if order_id.isdigit() and chat_id in user_data:
+        phone = user_data[chat_id]['phone']
+        bot.send_message(chat_id, "⏳ در حال استعلام فاکتور و تطبیق اطلاعات...")
+        
+        invoice_content = get_full_invoice_details(order_id, phone)
+        bot.send_message(chat_id, invoice_content, parse_mode="Markdown", reply_markup=get_main_keyboard())
+    else:
+        bot.send_message(chat_id, "❌ شماره سفارش نامعتبر است.", reply_markup=get_main_keyboard())
+
+# ================== منوی اصلی ==================
+def get_main_keyboard():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.row("🛒 محصولات", "🔍 جستجوی محصول")
     markup.row("📦 پیگیری سفارش", "📞 پشتیبانی و تماس")
-    bot.send_message(message.chat.id, "👋 خوش آمدید. گزینه مورد نظر را انتخاب کنید:", reply_markup=markup)
+    return markup
+
+@bot.message_handler(commands=['start'])
+def start(message):
+    bot.send_message(message.chat.id, "👋 خوش آمدید به بانه استور.\nگزینه مورد نظر را انتخاب کنید:", 
+                     reply_markup=get_main_keyboard())
+
+# بقیه هندلرها (پشتیبانی و محصولات) ...
 
 @app.route('/' + BOT_TOKEN, methods=['POST'])
 def getMessage():
@@ -116,7 +121,7 @@ def getMessage():
 def webhook():
     bot.remove_webhook()
     bot.set_webhook(url=RENDER_URL + '/' + BOT_TOKEN)
-    return "<h1>Full Invoice System Active</h1>", 200
+    return "<h1>Security System Active</h1>", 200
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))

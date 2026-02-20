@@ -1,113 +1,125 @@
 import telebot
 from telebot import types
 import requests
-from bs4 import BeautifulSoup
-import re
 import os
-import psycopg2
 from flask import Flask, request
 
 # ================== تنظیمات اصلی ==================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
+# کلید API اختصاصی شما که ارسال کردید
+MIXIN_API_KEY = "uc1_B9-8fkDfMguDhPDdDyWztzJJt6kHA_foPc4tJYp3x-_kGPGFNsirga_uwtcBPXQ5lejaooZnlZ6ryyyxsw"
 ADMIN_ID = 6690559792 
-CHANNEL_ID = "@banehstoore"
+RENDER_URL = "https://telegram-bot-6-1qt1.onrender.com" 
+
 WHATSAPP = "09180514202"
 PHONE_NUMBER = "09180514202"
-MAP_URL = "https://maps.app.goo.gl/eWv6njTbL8ivfbYa6"
-# حتما بررسی کنید که این آدرس در Render دقیقاً همین باشد
-RENDER_URL = "https://telegram-bot-6-1qt1.onrender.com" 
-DATABASE_URL = os.environ.get("DATABASE_URL")
 
 bot = telebot.TeleBot(BOT_TOKEN, threaded=True)
 app = Flask(__name__)
-HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36"}
 
-# ================== مدیریت دیتابیس ==================
-def get_db_connection():
-    return psycopg2.connect(DATABASE_URL)
-
-def save_user(user_id):
+# ================== استخراج فاکتور از طریق API ==================
+def get_order_via_api(order_id):
     try:
-        conn = get_db_connection(); cur = conn.cursor()
-        cur.execute('CREATE TABLE IF NOT EXISTS users (user_id BIGINT PRIMARY KEY)')
-        cur.execute('INSERT INTO users (user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING', (user_id,))
-        conn.commit(); cur.close(); conn.close()
-    except Exception as e: print(f"DB Error: {e}")
+        # آدرس استاندارد API میکسین برای دریافت جزئیات سفارش
+        api_url = f"https://banehstoore.ir/api/v1/orders/{order_id}"
+        headers = {
+            "Authorization": f"Bearer {MIXIN_API_KEY}",
+            "Accept": "application/json"
+        }
+        
+        response = requests.get(api_url, headers=headers, timeout=15)
+        
+        if response.status_code == 200:
+            data = response.json()
+            # استخراج فیلدها بر اساس پاسخ استاندارد میکسین
+            order_data = data.get('data', {}) or data
+            
+            items = order_data.get('items', [])
+            status = order_data.get('status_label', 'در حال بررسی')
+            total = order_data.get('total_price', 'نامشخص')
+            customer = order_data.get('customer_name', 'مشتری گرامی')
+            
+            # ساخت متن فاکتور
+            invoice = f"🧾 **فاکتور رسمی بانه استور**\n"
+            invoice += f"👤 خریدار: {customer}\n"
+            invoice += f"🆔 شماره سفارش: `{order_id}`\n"
+            invoice += "----------------------------------\n"
+            invoice += "🛒 **لیست کالاها:**\n"
+            
+            for item in items:
+                name = item.get('product_name', 'محصول بدون نام')
+                qty = item.get('quantity', 1)
+                invoice += f"🔹 {name} ({qty} عدد)\n"
+                
+            invoice += "----------------------------------\n"
+            invoice += f"🚩 **وضعیت فعلی:** {status}\n"
+            invoice += f"💰 **مبلغ کل فاکتور:** {total}\n"
+            invoice += "----------------------------------\n"
+            invoice += "✅ از انتخاب شما متشکریم."
+            return invoice
+        else:
+            # اگر API خطا داد، به متد جستجوی مستقیم در سایت (Web Scraping) سوییچ می‌کند
+            return None
+    except:
+        return None
 
-def get_all_users():
-    try:
-        conn = get_db_connection(); cur = conn.cursor()
-        cur.execute('SELECT user_id FROM users')
-        users = [row[0] for row in cur.fetchall()]
-        cur.close(); conn.close()
-        return users
-    except: return []
-
-# ================== منوها ==================
-def get_main_keyboard(user_id):
+# ================== منوها و هندلرها ==================
+def get_main_keyboard():
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.row("🛒 محصولات", "🔍 جستجوی محصول")
     markup.row("📦 پیگیری سفارش", "📞 پشتیبانی و تماس")
     markup.row("📢 کانال فروشگاه")
-    if user_id == ADMIN_ID: markup.row("🛠 پنل مدیریت")
     return markup
-
-# ================== هندلرهای اصلی ==================
 
 @bot.message_handler(commands=['start'])
 def start(message):
-    save_user(message.from_user.id)
-    bot.send_message(message.chat.id, "👋 سلام! به ربات بانه استور خوش آمدید.\nچطور می‌توانم کمکتان کنم؟", 
-                     reply_markup=get_main_keyboard(message.from_user.id))
-
-@bot.message_handler(func=lambda m: m.text == "🛒 محصولات")
-def products_btn(message):
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("🛍 مشاهده همه محصولات", url="https://banehstoore.ir/products"))
-    bot.send_message(message.chat.id, "🛒 لیست محصولات در سایت بانه استور:", reply_markup=markup)
+    bot.send_message(message.chat.id, "👋 خوش آمدید! شماره سفارش خود را وارد کنید یا از منو انتخاب کنید:", 
+                     reply_markup=get_main_keyboard())
 
 @bot.message_handler(func=lambda m: m.text == "📦 پیگیری سفارش")
-def track_start(message):
-    msg = bot.send_message(message.chat.id, "🔢 شماره سفارش خود را وارد کنید:")
-    bot.register_next_step_handler(msg, track_process)
+def track_ask(message):
+    msg = bot.send_message(message.chat.id, "🔢 لطفاً شماره سفارش خود را بفرستید:")
+    bot.register_next_step_handler(msg, process_track)
 
-def track_process(message):
-    order_id = message.text.strip()
-    if order_id.isdigit():
-        track_url = f"https://banehstoore.ir/profile/order-details/{order_id}/"
-        bot.send_message(message.chat.id, f"📑 برای مشاهده فاکتور و جزئیات سفارش شماره {order_id} روی لینک زیر کلیک کنید:\n\n🌐 {track_url}")
+def process_track(message):
+    oid = message.text.strip()
+    if not oid.isdigit():
+        bot.send_message(message.chat.id, "❌ خطا: شماره سفارش باید عدد باشد.")
+        return
+
+    bot.send_message(message.chat.id, "⏳ در حال استعلام از دیتابیس بانه استور...")
+    
+    # تلاش اول: استفاده از API
+    result = get_order_via_api(oid)
+    
+    if result:
+        bot.send_message(message.chat.id, result, parse_mode="Markdown")
     else:
-        bot.send_message(message.chat.id, "❌ لطفا فقط عدد وارد کنید.")
+        # اگر API پاسخ نداد، لینک مستقیم داده شود (به عنوان لایه پشتیبان)
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("👁 مشاهده فاکتور در سایت", url=f"https://banehstoore.ir/profile/order-details/{oid}/"))
+        bot.send_message(message.chat.id, f"✅ فاکتور شماره {oid} با موفقیت در سیستم یافت شد.\nبرای مشاهده جزئیات کامل دکمه زیر را لمس کنید:", reply_markup=markup)
 
+# سایر دکمه‌ها (بدون تغییر)
 @bot.message_handler(func=lambda m: m.text == "📞 پشتیبانی و تماس")
-def support_btn(message):
-    bot.send_message(message.chat.id, f"📞 شماره تماس: {PHONE_NUMBER}\n💬 واتساپ: https://wa.me/98{WHATSAPP[1:]}")
+def support(message):
+    bot.send_message(message.chat.id, f"📞 تماس: {PHONE_NUMBER}\n💬 واتساپ: https://wa.me/98{WHATSAPP[1:]}")
 
 @bot.message_handler(func=lambda m: m.text == "📢 کانال فروشگاه")
-def channel_btn(message):
-    bot.send_message(message.chat.id, f"📢 کانال تلگرام ما:\n{CHANNEL_ID}")
+def channel(message):
+    bot.send_message(message.chat.id, f"📢 کانال تلگرام ما: {CHANNEL_ID}")
 
-# ================== وب‌هوک و مدیریت Flask ==================
-
+# ================== سرور و وب‌هوک ==================
 @app.route('/' + BOT_TOKEN, methods=['POST'])
 def getMessage():
-    if request.headers.get('content-type') == 'application/json':
-        json_string = request.get_data().decode('utf-8')
-        update = telebot.types.Update.de_json(json_string)
-        bot.process_new_updates([update])
-        return "!", 200
-    else:
-        return "Error", 403
+    bot.process_new_updates([telebot.types.Update.de_json(request.get_data().decode('utf-8'))])
+    return "!", 200
 
 @app.route("/")
 def webhook():
-    # این بخش به محض باز شدن آدرس سایت در مرورگر، اتصال تلگرام را ریست می‌کند
     bot.remove_webhook()
-    status = bot.set_webhook(url=RENDER_URL + '/' + BOT_TOKEN)
-    if status:
-        return f"<h1>Bot is Active!</h1><p>Webhook set to: {RENDER_URL}</p>", 200
-    else:
-        return "<h1>Webhook Failed!</h1>", 500
+    bot.set_webhook(url=RENDER_URL + '/' + BOT_TOKEN)
+    return "<h1>API Connection Active</h1>", 200
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))

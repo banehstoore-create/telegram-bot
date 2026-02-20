@@ -44,16 +44,15 @@ def get_all_users():
         return users
     except: return []
 
-# ================== جستجوی کامل در میکسین ==================
+# ================== جستجوی محصول (بدون قیمت) ==================
 def search_in_site(query):
     try:
-        # جستجو در آدرس مخصوص میکسین
         search_url = f"https://banehstoore.ir/search?q={query.replace(' ', '+')}"
         r = requests.get(search_url, headers=HEADERS, timeout=15)
         soup = BeautifulSoup(r.text, "html.parser")
         
         products = []
-        # پیدا کردن تمامی لینک‌هایی که شامل ساختار محصول هستند
+        # استخراج لینک‌ها و عناوین بر اساس ساختار میکسین
         links = soup.find_all('a', href=re.compile(r'/product/'))
         
         for link in links:
@@ -63,14 +62,15 @@ def search_in_site(query):
             if url.startswith('/'):
                 url = f"https://banehstoore.ir{url}"
             
-            # پاکسازی و فیلتر (میکسین گاهی عکس و متن را جدا لینک می‌کند، تکراری‌ها را حذف می‌کنیم)
+            # حذف موارد تکراری و متون کوتاه غیر مرتبط
             if title and len(title) > 3:
                 if not any(p['url'] == url for p in products):
+                    # در اینجا فقط نام محصول را ذخیره می‌کنیم
                     products.append({"title": title, "url": url})
             
         return products
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Search Error: {e}")
         return []
 
 # ================== منوها ==================
@@ -84,37 +84,36 @@ def get_main_keyboard(user_id):
 @bot.message_handler(commands=['start'])
 def start(message):
     save_user(message.from_user.id)
-    bot.send_message(message.chat.id, "👋 خوش آمدید به بانه استور\nنام محصول مورد نظرتان را بنویسید تا تمام موارد موجود را نمایش دهم:", 
+    bot.send_message(message.chat.id, "👋 به بانه استور خوش آمدید\nنام محصول مورد نظرتان را تایپ کنید تا لیست آن را نمایش دهم:", 
                      reply_markup=get_main_keyboard(message.from_user.id))
 
 @bot.message_handler(func=lambda m: m.text == "🔍 جستجوی محصول")
 def search_hint(message):
-    bot.send_message(message.chat.id, "🔎 اسم محصول را تایپ کنید (مثلاً: ال جی، بوش، سرخ کن...)")
+    bot.send_message(message.chat.id, "🔎 نام محصول را بفرستید (مثلاً: جاروبرقی، ال جی، سامسونگ...)")
 
-# ================== مدیریت هوشمند پیام‌ها و نمایش نتایج ==================
+# ================== مدیریت هوشمند پیام‌ها و جستجو ==================
 @bot.message_handler(func=lambda m: True)
 def handle_all(message):
-    # لاجیک دکمه‌های ادمین
+    # لاجیک پنل مدیریت (فقط ادمین)
     if message.from_user.id == ADMIN_ID:
         if message.text == "🛠 پنل مدیریت":
-            u_count = len(get_all_users())
             markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
             markup.add("📣 ارسال همگانی", "📊 آمار")
             markup.add("🔙 بازگشت")
-            bot.send_message(ADMIN_ID, f"🛠 پنل مدیریت | کاربران: {u_count}", reply_markup=markup)
+            bot.send_message(ADMIN_ID, "🛠 پنل مدیریت فعال شد:", reply_markup=markup)
             return
         elif message.text == "📊 آمار":
-            bot.send_message(ADMIN_ID, f"👥 تعداد کل اعضا: {len(get_all_users())}")
+            bot.send_message(ADMIN_ID, f"👥 کل کاربران ثبت شده: {len(get_all_users())}")
             return
         elif message.text == "📣 ارسال همگانی":
-            msg = bot.send_message(ADMIN_ID, "پیام خود را بفرستید:")
+            msg = bot.send_message(ADMIN_ID, "لطفاً پیام خود را جهت ارسال به همه بفرستید:")
             bot.register_next_step_handler(msg, do_broadcast)
             return
         elif message.text == "🔙 بازگشت":
             bot.send_message(ADMIN_ID, "منوی اصلی:", reply_markup=get_main_keyboard(ADMIN_ID))
             return
 
-    # سیستم جستجو برای همه کاربران
+    # موتور جستجو برای همه
     query = message.text
     if len(query) < 2: return 
 
@@ -122,28 +121,24 @@ def handle_all(message):
     results = search_in_site(query)
     
     if results:
-        # چیدمان دو ستونه برای دکمه‌ها (row_width=2)
-        markup = types.InlineKeyboardMarkup(row_width=2)
-        btn_list = []
+        markup = types.InlineKeyboardMarkup(row_width=1) # نمایش لیست‌وار برای خوانایی بهتر نام‌ها
         for res in results:
-            btn_list.append(types.InlineKeyboardButton(res['title'], url=res['url']))
+            markup.add(types.InlineKeyboardButton(res['title'], url=res['url']))
         
-        markup.add(*btn_list) # اضافه کردن تمام دکمه‌ها به صورت یکجا
-        
-        bot.send_message(message.chat.id, f"✅ تعداد {len(results)} مورد برای '{query}' پیدا شد:", reply_markup=markup)
+        bot.send_message(message.chat.id, f"✅ نتایج یافت شده برای '{query}':\n(برای مشاهده جزئیات روی نام محصول کلیک کنید)", reply_markup=markup)
     else:
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🌐 جستجوی مستقیم در سایت", url=f"https://banehstoore.ir/search?q={query}"))
-        bot.send_message(message.chat.id, f"❌ محصولی با نام '{query}' در لیست سریع پیدا نشد. می‌توانید در سایت جستجو کنید:", reply_markup=markup)
+        markup.add(types.InlineKeyboardButton("🌐 مشاهده جستجو در سایت", url=f"https://banehstoore.ir/search?q={query}"))
+        bot.send_message(message.chat.id, f"❌ موردی برای '{query}' پیدا نشد. می‌توانید لیست کامل را در سایت ببینید:", reply_markup=markup)
 
 def do_broadcast(message):
     users = get_all_users()
     for u in users:
         try: bot.copy_message(u, message.chat.id, message.message_id)
         except: pass
-    bot.send_message(ADMIN_ID, "✅ ارسال همگانی با موفقیت انجام شد.")
+    bot.send_message(ADMIN_ID, "✅ پیام شما برای تمام اعضا ارسال شد.")
 
-# ================== اجرای سرور ==================
+# ================== وب‌هوک و سرور ==================
 @app.route('/' + BOT_TOKEN, methods=['POST'])
 def getMessage():
     bot.process_new_updates([telebot.types.Update.de_json(request.get_data().decode('utf-8'))])
@@ -152,7 +147,7 @@ def getMessage():
 @app.route("/")
 def webhook():
     bot.remove_webhook(); bot.set_webhook(url=RENDER_URL + '/' + BOT_TOKEN)
-    return "<h1>Baneh Stoore Search is Active!</h1>", 200
+    return "<h1>Search System (Name Only) is Active!</h1>", 200
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))

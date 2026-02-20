@@ -62,16 +62,36 @@ init_db()
 # ================== تابع منوی هوشمند ==================
 def get_main_keyboard(user_id):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add("🛒 محصولات", "📞 پشتیبانی و تماس")
-    markup.add("📢 کانال فروشگاه")
-    
-    # اگر کاربر ادمین بود، دکمه مدیریت را اضافه کن
+    markup.add("🛒 محصولات", "🔍 جستجوی محصول")
+    markup.add("📞 پشتیبانی و تماس", "📢 کانال فروشگاه")
     if user_id == ADMIN_ID:
         markup.add("🛠 پنل مدیریت")
-        
     return markup
 
-# ================== توابع محصول ==================
+# ================== توابع جستجو و محصول ==================
+def search_in_site(query):
+    """جستجو در محصولات سایت"""
+    try:
+        search_url = f"https://banehstoore.ir/?s={query}"
+        r = requests.get(search_url, headers=HEADERS, timeout=15)
+        soup = BeautifulSoup(r.text, "html.parser")
+        
+        # پیدا کردن محصولات (براساس کلاس‌های متداول ووکامرس)
+        products = []
+        # این بخش نام محصولات را از تگ‌های h2 یا h3 که لینک دارند استخراج می‌کند
+        items = soup.find_all(["h2", "h3"], class_=re.compile("product-title|loop-product__title|title"))
+        
+        for item in items[:8]: # نمایش حداکثر 8 نتیجه اول
+            a_tag = item.find("a") or item.parent.find("a")
+            if a_tag and a_tag.get("href"):
+                products.append({
+                    "title": item.get_text(strip=True),
+                    "url": a_tag.get("href")
+                })
+        return products
+    except:
+        return []
+
 def fetch_product(url):
     try:
         r = requests.get(url, headers=HEADERS, timeout=15)
@@ -91,9 +111,13 @@ def start(message):
     save_user(message.from_user.id)
     bot.send_message(
         message.chat.id,
-        "👋 به ربات بانه استور خوش آمدید\nلطفاً از منوی زیر استفاده کنید:",
+        "👋 به ربات بانه استور خوش آمدید\nمحصول مورد نظرت را جستجو کن یا از منو استفاده کن:",
         reply_markup=get_main_keyboard(message.from_user.id)
     )
+
+@bot.message_handler(func=lambda m: m.text == "🔍 جستجوی محصول")
+def search_prompt(message):
+    bot.send_message(message.chat.id, "🔎 لطفاً نام محصول مورد نظر خود را تایپ کنید (مثلاً: سرخ کن)")
 
 @bot.message_handler(func=lambda m: m.text == "🛒 محصولات")
 def products_menu(message):
@@ -104,7 +128,7 @@ def products_menu(message):
         types.InlineKeyboardButton("🧹 جاروبرقی", url="https://banehstoore.ir/product-category/vacuum-cleaner/"),
         types.InlineKeyboardButton("🛍 مشاهده همه محصولات", url="https://banehstoore.ir/shop/")
     )
-    bot.send_message(message.chat.id, "🛒 **دسته‌بندی‌های محصولات:**", reply_markup=markup, parse_mode="Markdown")
+    bot.send_message(message.chat.id, "🛒 **دسته‌بندی‌های اصلی:**", reply_markup=markup, parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text == "📞 پشتیبانی و تماس")
 def support_menu(message):
@@ -114,58 +138,66 @@ def support_menu(message):
         types.InlineKeyboardButton("💬 پیام در واتساپ", url=f"https://wa.me/98{WHATSAPP[1:]}"),
         types.InlineKeyboardButton("📍 آدرس فروشگاه", url=MAP_URL)
     )
-    bot.send_message(message.chat.id, "📞 راه‌های ارتباطی با ما:", reply_markup=markup)
+    bot.send_message(message.chat.id, "📞 راه‌های ارتباطی:", reply_markup=markup)
 
-@bot.callback_query_handler(func=lambda call: call.data == "call_us")
-def call_contact(call):
-    bot.answer_callback_query(call.id)
-    bot.send_message(call.message.chat.id, f"📱 شماره تماس:\n`{PHONE_NUMBER}`", parse_mode="Markdown")
+# ================== منطق جستجوی متن آزاد ==================
+@bot.message_handler(func=lambda m: True)
+def handle_all_messages(message):
+    # چک کردن اگر ادمین لینک فرستاده برای کانال
+    if message.from_user.id == ADMIN_ID and "banehstoore.ir" in message.text:
+        admin_post_product(message)
+        return
 
-@bot.message_handler(func=lambda m: m.text == "📢 کانال فروشگاه")
-def channel_info(message):
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("🔗 ورود به کانال", url=f"https://t.me/{CHANNEL_ID[1:]}"))
-    bot.send_message(message.chat.id, f"📢 کانال تلگرام ما:\n{CHANNEL_ID}", reply_markup=markup)
+    # چک کردن دکمه‌های ادمین
+    if message.from_user.id == ADMIN_ID:
+        if message.text == "🛠 پنل مدیریت": admin_panel(message); return
+        if message.text == "📊 آمار کاربران": stats(message); return
+        if message.text == "📣 ارسال پیام همگانی": broadcast_prompt(message); return
+        if message.text == "🔙 بازگشت به منوی اصلی": back_home(message); return
 
-# ================== بخش مدیریت (فقط برای ادمین) ==================
+    # در غیر این صورت، جستجو در سایت
+    query = message.text
+    bot.send_chat_action(message.chat.id, 'typing')
+    results = search_in_site(query)
+    
+    if results:
+        markup = types.InlineKeyboardMarkup(row_width=1)
+        for res in results:
+            markup.add(types.InlineKeyboardButton(res['title'], url=res['url']))
+        
+        bot.send_message(message.chat.id, f"🔎 نتایج جستجو برای '{query}':", reply_markup=markup)
+    else:
+        bot.send_message(message.chat.id, "❌ متأسفانه محصولی پیدا نشد. لطفاً نام محصول را دقیق‌تر بنویسید.")
 
-@bot.message_handler(func=lambda m: m.text == "🛠 پنل مدیریت" and m.from_user.id == ADMIN_ID)
+# ================== بخش مدیریت و ارسال به کانال (همان کدهای قبلی) ==================
+
 def admin_panel(message):
     users = get_all_users()
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add("📣 ارسال پیام همگانی", "📊 آمار کاربران")
     markup.add("🔙 بازگشت به منوی اصلی")
-    bot.send_message(message.chat.id, f"🛠 **خوش آمدید ادمین عزیز**\nتعداد کاربران فعال: `{len(users)}`", reply_markup=markup, parse_mode="Markdown")
+    bot.send_message(message.chat.id, f"🛠 **پنل مدیریت**\nکاربران: `{len(users)}`", reply_markup=markup, parse_mode="Markdown")
 
-@bot.message_handler(func=lambda m: m.text == "📊 آمار کاربران" and m.from_user.id == ADMIN_ID)
 def stats(message):
     users = get_all_users()
-    bot.send_message(message.chat.id, f"👥 تعداد کل کاربران ثبت شده در دیتابیس: `{len(users)}`", parse_mode="Markdown")
+    bot.send_message(message.chat.id, f"👥 کل کاربران: `{len(users)}`", parse_mode="Markdown")
 
-@bot.message_handler(func=lambda m: m.text == "📣 ارسال پیام همگانی" and m.from_user.id == ADMIN_ID)
 def broadcast_prompt(message):
-    msg = bot.send_message(message.chat.id, "لطفاً پیام خود را (متن، عکس یا کد تخفیف) بفرستید تا برای همه ارسال شود:")
+    msg = bot.send_message(message.chat.id, "📣 پیام همگانی را بفرستید:")
     bot.register_next_step_handler(msg, do_broadcast)
 
 def do_broadcast(message):
     users = get_all_users()
-    success = 0
     for uid in users:
-        try:
-            bot.copy_message(uid, message.chat.id, message.message_id)
-            success += 1
+        try: bot.copy_message(uid, message.chat.id, message.message_id)
         except: pass
-    bot.send_message(ADMIN_ID, f"✅ پیام برای {success} نفر با موفقیت ارسال شد.")
+    bot.send_message(ADMIN_ID, "✅ ارسال شد.")
 
-@bot.message_handler(func=lambda m: m.text == "🔙 بازگشت به منوی اصلی")
 def back_home(message):
     bot.send_message(message.chat.id, "منوی اصلی:", reply_markup=get_main_keyboard(message.from_user.id))
 
-# ================== ارسال محصول به کانال ==================
-
-@bot.message_handler(func=lambda m: m.from_user.id == ADMIN_ID and "banehstoore.ir" in (m.text or ""))
 def admin_post_product(message):
-    bot.send_message(message.chat.id, "⏳ در حال استخراج و ارسال به کانال...")
+    bot.send_message(message.chat.id, "⏳ در حال ارسال به کانال...")
     try:
         url = re.search(r'(https?://[^\s]+)', message.text).group(0)
         data = fetch_product(url)
@@ -174,29 +206,24 @@ def admin_post_product(message):
             caption = f"🛍 **{title}**\n\n💰 قیمت: {price}\n📦 وضعیت: {stock}\n\n🆔 {CHANNEL_ID}"
             markup = types.InlineKeyboardMarkup()
             markup.add(types.InlineKeyboardButton("🛒 خرید از سایت", url=url),
-                       types.InlineKeyboardButton("📲 مشاوره و سفارش", url=f"https://wa.me/98{WHATSAPP[1:]}"))
-            if image:
-                bot.send_photo(CHANNEL_ID, image, caption=caption, parse_mode="Markdown", reply_markup=markup)
-            else:
-                bot.send_message(CHANNEL_ID, caption, parse_mode="Markdown", reply_markup=markup)
-            bot.send_message(message.chat.id, "✅ با موفقیت در کانال منتشر شد.")
-    except Exception as e:
-        bot.send_message(message.chat.id, f"❌ خطا: {e}")
+                       types.InlineKeyboardButton("📲 سفارش", url=f"https://wa.me/98{WHATSAPP[1:]}"))
+            if image: bot.send_photo(CHANNEL_ID, image, caption=caption, parse_mode="Markdown", reply_markup=markup)
+            else: bot.send_message(CHANNEL_ID, caption, parse_mode="Markdown", reply_markup=markup)
+            bot.send_message(message.chat.id, "✅ ارسال شد.")
+    except Exception as e: bot.send_message(message.chat.id, f"❌ خطا: {e}")
 
 # ================== وب‌هوک و سرور ==================
 
 @app.route('/' + BOT_TOKEN, methods=['POST'])
 def getMessage():
-    json_string = request.get_data().decode('utf-8')
-    update = telebot.types.Update.de_json(json_string)
-    bot.process_new_updates([update])
+    bot.process_new_updates([telebot.types.Update.de_json(request.get_data().decode('utf-8'))])
     return "!", 200
 
 @app.route("/")
 def webhook():
     bot.remove_webhook()
     bot.set_webhook(url=RENDER_URL + '/' + BOT_TOKEN)
-    return "<h1>Bot is Active with Admin Button!</h1>", 200
+    return "<h1>Baneh Stoore Bot Search is Ready!</h1>", 200
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))

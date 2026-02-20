@@ -9,7 +9,6 @@ from flask import Flask, request
 
 # ================== تنظیمات اصلی ==================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
-# این مقدار از تنظیمات Render خوانده می‌شود
 MY_COOKIE = os.environ.get("MY_COOKIE", "") 
 ADMIN_ID = 6690559792 
 CHANNEL_ID = "@banehstoore"
@@ -21,34 +20,39 @@ RENDER_URL = "https://telegram-bot-6-1qt1.onrender.com"
 bot = telebot.TeleBot(BOT_TOKEN, threaded=True)
 app = Flask(__name__)
 
-# هدرهای لازم برای شبیه‌سازی دقیق مرورگر
+# هدر بسیار پیشرفته برای شبیه‌سازی دقیق مرورگر واقعی
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36",
     "Cookie": MY_COOKIE,
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    "Accept-Language": "fa-IR,fa;q=0.9",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Language": "fa-IR,fa;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Cache-Control": "max-age=0",
+    "Upgrade-Insecure-Requests": "1",
     "Referer": "https://banehstoore.ir/profile/orders/",
     "Connection": "keep-alive"
 }
 
-# ================== تابع هوشمند استخراج فاکتور ==================
+# ================== تابع استخراج فاکتور (با دیباگ هوشمند) ==================
 def fetch_order_details_complete(order_id):
-    if not MY_COOKIE or "sessionid" not in MY_COOKIE:
-        return "🔑 <b>خطا:</b> متغیر <code>MY_COOKIE</code> در Render به درستی تنظیم نشده است."
+    if not MY_COOKIE:
+        return "⚠️ مدیر عزیز، ابتدا باید کل متن کوکی را در تنظیمات Render و در متغیر <code>MY_COOKIE</code> قرار دهید."
         
     try:
         url = f"https://banehstoore.ir/profile/order-details/{order_id}/"
-        # ارسال درخواست به سایت با کوکی جدید شما
-        response = requests.get(url, headers=HEADERS, timeout=25)
+        # ایجاد یک جلسه (Session) برای پایداری بیشتر
+        session = requests.Session()
+        response = session.get(url, headers=HEADERS, timeout=30)
         
-        # بررسی اینکه آیا وارد صفحه لاگین شده‌ایم یا خیر
-        if "login" in response.url or "ورود به حساب" in response.text:
-            return "❌ <b>عدم دسترسی:</b> کوکی شما منقضی شده است. لطفا دوباره سشن جدید بگیرید."
+        # لاگ برای شما در کنسول Render
+        print(f"DEBUG: Status Code: {response.status_code}")
+        print(f"DEBUG: Redirected to: {response.url}")
+
+        if "login" in response.url or "ورود" in response.text:
+            return "❌ <b>عدم دسترسی:</b> سایت ربات را به صفحه ورود هدایت کرد. این یعنی کوکی شما منقضی شده یا اشتباه کپی شده است.\n\n💡 <b>راه حل:</b> دوباره در Kiwi Browser وارد سایت شوید و کل متن <code>document.cookie</code> را کپی کرده و در Render جایگزین کنید."
 
         soup = BeautifulSoup(response.text, "html.parser")
         all_text = soup.get_text(separator=" ", strip=True)
 
-        # تابع کمکی برای استخراج امن داده‌ها
         def get_clean_data(pattern):
             match = re.search(pattern, all_text)
             val = match.group(1).strip() if match else "یافت نشد"
@@ -60,23 +64,14 @@ def fetch_order_details_complete(order_id):
         total_price = get_clean_data(r"مبلغ کل\s*[:：]\s*([\d,]+)\s*تومان")
         status = get_clean_data(r"وضعیت\s*[:：]\s*([^👤📍🛒💰🚩]+)")
 
-        # استخراج نام محصول از محتوا
-        product_name = "جزئیات در پنل سایت موجود است"
-        p_tag = soup.find(string=re.compile(r"مدل|سرخ کن|اسپرسو", re.I))
-        if p_tag:
-            product_name = html.escape(p_tag.parent.get_text(strip=True))
-
-        # ساخت قالب بصری فاکتور
         res = f"<b>📑 جزئیات فاکتور شماره {order_id}</b>\n"
         res += "━━━━━━━━━━━━━━━\n"
         res += f"👤 <b>تحویل گیرنده:</b> {receiver.split('شماره')[0].strip()}\n"
         res += f"📞 <b>شماره تماس:</b> <code>{phone}</code>\n"
         res += f"📍 <b>آدرس:</b> {address.split('مبلغ کل')[0].strip()}\n"
         res += "━━━━━━━━━━━━━━━\n"
-        res += f"🛒 <b>محصول:</b> {product_name}\n"
-        res += "━━━━━━━━━━━━━━━\n"
-        res += f"🚩 <b>وضعیت سفارش:</b> {status.split('پرداخت')[0].strip()}\n"
-        res += f"💰 <b>مبلغ نهایی:</b> {total_price} تومان\n"
+        res += f"🚩 <b>وضعیت:</b> {status.split('پرداخت')[0].strip()}\n"
+        res += f"💰 <b>مبلغ کل:</b> {total_price} تومان\n"
         res += "━━━━━━━━━━━━━━━\n"
         res += "✅ بانه استور - مرجع لوازم خانگی"
         return res
@@ -84,7 +79,7 @@ def fetch_order_details_complete(order_id):
     except Exception as e:
         return f"⚠️ <b>خطای فنی:</b> <code>{html.escape(str(e))}</code>"
 
-# ================== مدیریت منوها و دکمه‌ها ==================
+# ================== کیبوردها و هندلرها (بدون هیچ حذفیاتی) ==================
 def get_main_keyboard(user_id):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.row("🛒 محصولات", "🔍 جستجوی محصول")
@@ -95,40 +90,39 @@ def get_main_keyboard(user_id):
 
 @bot.message_handler(commands=['start'])
 def start(message):
-    bot.send_message(message.chat.id, "👋 خوش آمدید به بانه استور\nبرای پیگیری سفارش یا مشاهده محصولات از منوی زیر استفاده کنید:", 
-                     reply_markup=get_main_keyboard(message.from_user.id))
+    bot.send_message(message.chat.id, "👋 خوش آمدید به بانه استور", reply_markup=get_main_keyboard(message.from_user.id))
 
 @bot.message_handler(func=lambda m: m.text == "📦 پیگیری سفارش")
-def track_start(message):
+def track_step_1(message):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
     markup.add(types.KeyboardButton("📲 تایید و ارسال شماره موبایل", request_contact=True))
-    bot.send_message(message.chat.id, "🔐 برای امنیت اطلاعات، ابتدا شماره موبایل خود را تایید کنید:", reply_markup=markup)
+    bot.send_message(message.chat.id, "🔐 ابتدا شماره موبایل خود را تایید کنید:", reply_markup=markup)
 
 @bot.message_handler(content_types=['contact'])
 def contact_handler(message):
-    msg = bot.send_message(message.chat.id, "✅ تایید شد. حالا **شماره سفارش** را وارد کنید:", reply_markup=types.ReplyKeyboardRemove())
-    bot.register_next_step_handler(msg, track_final)
+    msg = bot.send_message(message.chat.id, "🔢 حالا **شماره سفارش** را وارد کنید:", reply_markup=types.ReplyKeyboardRemove())
+    bot.register_next_step_handler(msg, track_step_2)
 
-def track_final(message):
+def track_step_2(message):
     order_id = message.text.strip()
     if order_id.isdigit():
         bot.send_message(message.chat.id, "⏳ در حال استخراج فاکتور از سایت...")
         invoice = fetch_order_details_complete(order_id)
         bot.send_message(message.chat.id, invoice, parse_mode="HTML", reply_markup=get_main_keyboard(message.from_user.id))
     else:
-        bot.send_message(message.chat.id, "❌ خطا! شماره سفارش فقط باید عدد باشد.")
+        bot.send_message(message.chat.id, "❌ لطفا فقط عدد وارد کنید.")
 
-# دکمه‌های محصولات و ارتباطات
+# دکمه‌های محصولات، پشتیبانی و کانال
 @bot.message_handler(func=lambda m: m.text == "🛒 محصولات")
-def prod(m): bot.send_message(m.chat.id, "🛒 محصولات بانه استور را در لینک زیر ببینید:\nhttps://banehstoore.ir/products")
+def prod(m): bot.send_message(m.chat.id, "🛒 محصولات بانه استور:\nhttps://banehstoore.ir/products")
 
 @bot.message_handler(func=lambda m: m.text == "📞 پشتیبانی و تماس")
-def supp(m): bot.send_message(m.chat.id, f"📞 شماره تماس: {PHONE_NUMBER}\n💬 واتساپ: https://wa.me/98{WHATSAPP[1:]}")
+def supp(m): bot.send_message(m.chat.id, f"📞 تماس: {PHONE_NUMBER}\n💬 واتساپ: https://wa.me/98{WHATSAPP[1:]}")
 
 @bot.message_handler(func=lambda m: m.text == "📢 کانال فروشگاه")
-def chan(m): bot.send_message(m.chat.id, f"📢 کانال تلگرام ما را دنبال کنید:\n{CHANNEL_ID}")
+def chan(m): bot.send_message(m.chat.id, f"📢 کانال تلگرام: {CHANNEL_ID}")
 
-# ================== وب‌هوک و سرور ==================
+# ================== وب‌هوک و اجرا ==================
 @app.route('/' + BOT_TOKEN, methods=['POST'])
 def getMessage():
     bot.process_new_updates([telebot.types.Update.de_json(request.get_data().decode('utf-8'))])
@@ -137,7 +131,7 @@ def getMessage():
 @app.route("/")
 def webhook():
     bot.remove_webhook(); bot.set_webhook(url=RENDER_URL + '/' + BOT_TOKEN)
-    return "<h1>Bot is Ready with SessionID!</h1>", 200
+    return "<h1>Bot is Ready with Advanced Headers</h1>", 200
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))

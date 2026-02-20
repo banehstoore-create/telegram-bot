@@ -41,22 +41,48 @@ def get_all_users():
         return users
     except: return []
 
-# ================== توابع کمکی ==================
-def search_in_site(query):
+# ================== استخراج مستقیم جزئیات سفارش از میکسین ==================
+def fetch_order_details(order_id):
     try:
-        search_url = f"https://banehstoore.ir/search?q={query.replace(' ', '+')}"
-        r = requests.get(search_url, headers=HEADERS, timeout=10)
+        # آدرس مستقیم جزئیات سفارش طبق اعلام شما
+        order_url = f"https://banehstoore.ir/profile/order-details/{order_id}/"
+        r = requests.get(order_url, headers=HEADERS, timeout=15)
+        
+        if r.status_code != 200:
+            return "❌ سفارش یافت نشد یا دسترسی مقدور نیست. لطفاً شماره سفارش را بررسی کنید."
+
         soup = BeautifulSoup(r.text, "html.parser")
+        
+        # استخراج اطلاعات (با توجه به ساختار میکسین)
+        # تلاش برای پیدا کردن آیتم‌های سفارش
         products = []
-        links = soup.find_all('a', href=re.compile(r'/product/'))
-        for link in links:
-            title = link.get_text(strip=True)
-            url = link.get('href')
-            if url.startswith('/'): url = f"https://banehstoore.ir{url}"
-            if title and len(title) > 3 and not any(p['url'] == url for p in products):
-                products.append({"title": title, "url": url})
-        return products
-    except: return []
+        # معمولا در میکسین نام محصول در کلاس‌های مخصوص یا تگ‌های a داخل جدول سفارش است
+        items = soup.find_all(class_=re.compile("product|item-name|title", re.I))
+        for item in items[:5]: # حداکثر ۵ آیتم اول
+            name = item.get_text(strip=True)
+            if len(name) > 10: products.append(f"🔹 {name}")
+
+        # استخراج وضعیت و مبلغ کل
+        status = "نامشخص"
+        status_tag = soup.find(class_=re.compile("status|step-active|order-state", re.I))
+        if status_tag: status = status_tag.get_text(strip=True)
+
+        total_price = "نامشخص"
+        price_tag = soup.find(class_=re.compile("total|price|amount", re.I))
+        if price_tag: total_price = price_tag.get_text(strip=True)
+
+        # ساخت متن فاکتور
+        order_text = f"📦 **جزئیات سفارش شماره {order_id}**\n\n"
+        if products:
+            order_text += "🛒 **محصولات:**\n" + "\n".join(set(products)) + "\n\n"
+        
+        order_text += f"🚩 **وضعیت فعلی:** {status}\n"
+        order_text += f"💰 **مبلغ کل:** {total_price}\n\n"
+        order_text += f"🌐 [مشاهده در سایت]({order_url})"
+        
+        return order_text
+    except Exception as e:
+        return f"⚠️ سیستم در حال حاضر قادر به خواندن جزئیات نیست.\n🔗 لطفاً از لینک زیر استفاده کنید:\nhttps://banehstoore.ir/profile/order-details/{order_id}/"
 
 # ================== منوی اصلی ==================
 def get_main_keyboard(user_id):
@@ -64,135 +90,79 @@ def get_main_keyboard(user_id):
     markup.row("🛒 محصولات", "🔍 جستجوی محصول")
     markup.row("📦 پیگیری سفارش", "📞 پشتیبانی و تماس")
     markup.row("📢 کانال فروشگاه")
-    if user_id == ADMIN_ID:
-        markup.row("🛠 پنل مدیریت")
+    if user_id == ADMIN_ID: markup.row("🛠 پنل مدیریت")
     return markup
 
-# ================== هندلرهای اصلی ==================
-
+# ================== هندلرهای دکمه‌ها ==================
 @bot.message_handler(commands=['start'])
 def start(message):
     save_user(message.from_user.id)
-    bot.send_message(message.chat.id, "👋 به بانه استور خوش آمدید\nگزینه مورد نظر را انتخاب کنید:", reply_markup=get_main_keyboard(message.from_user.id))
+    bot.send_message(message.chat.id, "👋 خوش آمدید به بانه استور\nاز منوی زیر استفاده کنید:", reply_markup=get_main_keyboard(message.from_user.id))
 
 @bot.message_handler(func=lambda m: m.text == "🛒 محصولات")
 def products_btn(message):
     markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        types.InlineKeyboardButton("☕ اسپرسوساز", url="https://banehstoore.ir/category/espresso-maker"),
-        types.InlineKeyboardButton("🍟 سرخ‌کن", url="https://banehstoore.ir/category/air-fryer"),
-        types.InlineKeyboardButton("🛍 همه محصولات", url="https://banehstoore.ir/products")
-    )
+    markup.add(types.InlineKeyboardButton("☕ اسپرسوساز", url="https://banehstoore.ir/category/espresso-maker"),
+               types.InlineKeyboardButton("🍟 سرخ‌کن", url="https://banehstoore.ir/category/air-fryer"),
+               types.InlineKeyboardButton("🛍 همه محصولات", url="https://banehstoore.ir/products"))
     bot.send_message(message.chat.id, "🛒 دسته‌بندی محصولات:", reply_markup=markup)
+
+@bot.message_handler(func=lambda m: m.text == "📦 پیگیری سفارش")
+def track_start(message):
+    msg = bot.send_message(message.chat.id, "🔢 لطفاً شماره سفارش خود را وارد کنید:")
+    bot.register_next_step_handler(msg, track_process)
+
+def track_process(message):
+    order_id = message.text.strip()
+    # جلوگیری از تداخل با دکمه‌ها
+    if order_id in ["🛒 محصولات", "🔍 جستجوی محصول", "📦 پیگیری سفارش", "📞 پشتیبانی و تماس", "📢 کانال فروشگاه"]:
+        return
+
+    if order_id.isdigit():
+        bot.send_chat_action(message.chat.id, 'typing')
+        result = fetch_order_details(order_id)
+        bot.send_message(message.chat.id, result, parse_mode="Markdown", disable_web_page_preview=False)
+    else:
+        bot.send_message(message.chat.id, "❌ لطفا فقط شماره سفارش را به صورت عدد وارد کنید.")
 
 @bot.message_handler(func=lambda m: m.text == "📞 پشتیبانی و تماس")
 def support_btn(message):
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(
-        types.InlineKeyboardButton("📞 تماس مستقیم", callback_data="call_admin"),
-        types.InlineKeyboardButton("💬 واتساپ", url=f"https://wa.me/98{WHATSAPP[1:]}"),
-        types.InlineKeyboardButton("📍 آدرس روی نقشه", url=MAP_URL)
-    )
-    bot.send_message(message.chat.id, "📞 پشتیبانی بانه استور:", reply_markup=markup)
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("💬 پیام در واتساپ", url=f"https://wa.me/98{WHATSAPP[1:]}"))
+    bot.send_message(message.chat.id, "📞 برای پشتیبانی با ما در ارتباط باشید:", reply_markup=markup)
 
 @bot.message_handler(func=lambda m: m.text == "📢 کانال فروشگاه")
 def channel_btn(message):
     markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("🔗 عضویت در کانال", url=f"https://t.me/{CHANNEL_ID[1:]}"))
-    bot.send_message(message.chat.id, f"📢 کانال تلگرام ما:\n{CHANNEL_ID}", reply_markup=markup)
+    markup.add(types.InlineKeyboardButton("🔗 ورود به کانال", url=f"https://t.me/{CHANNEL_ID[1:]}"))
+    bot.send_message(message.chat.id, f"📢 کانال تلگرام ما: {CHANNEL_ID}", reply_markup=markup)
 
-@bot.message_handler(func=lambda m: m.text == "🔍 جستجوی محصول")
-def search_btn_hint(message):
-    bot.send_message(message.chat.id, "🔎 نام محصول مورد نظر را تایپ کنید:")
-
-# ================== بخش پیگیری سفارش (اصلاح شده برای میکسین) ==================
-
-@bot.message_handler(func=lambda m: m.text == "📦 پیگیری سفارش")
-def track_order_start(message):
-    msg = bot.send_message(message.chat.id, "🔢 لطفاً شماره سفارش خود را وارد کنید:")
-    bot.register_next_step_handler(msg, track_order_result)
-
-def track_order_result(message):
-    order_id = message.text.strip()
-    
-    # خروج از حالت پیگیری در صورت کلیک روی دکمه‌های اصلی
-    if order_id in ["🛒 محصولات", "🔍 جستجوی محصول", "📦 پیگیری سفارش", "📞 پشتیبانی و تماس", "📢 کانال فروشگاه"]:
-        if order_id == "🛒 محصولات": products_btn(message)
-        elif order_id == "🔍 جستجوی محصول": search_btn_hint(message)
-        elif order_id == "📦 پیگیری سفارش": track_order_start(message)
-        elif order_id == "📞 پشتیبانی و تماس": support_btn(message)
-        elif order_id == "📢 کانال فروشگاه": channel_btn(message)
-        return
-
-    if order_id.isdigit():
-        # اصلاح آدرس طبق ساختار استاندارد میکسین (استفاده از کوئری پارامتر)
-        track_url = f"https://banehstoore.ir/order/track?id={order_id}"
-        
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("🌐 مشاهده وضعیت در سایت", url=track_url))
-        
-        bot.send_message(
-            message.chat.id, 
-            f"📦 **درخواست پیگیری برای سفارش {order_id}**\n\nبرای مشاهده وضعیت سفارش و کد رهگیری پستی، روی دکمه زیر کلیک کنید:",
-            reply_markup=markup,
-            parse_mode="Markdown"
-        )
-    else:
-        bot.send_message(message.chat.id, "❌ شماره سفارش باید فقط عدد باشد.")
-
-# ================== پنل مدیریت ==================
-
+# ================== مدیریت و جستجو ==================
 @bot.message_handler(func=lambda m: m.text == "🛠 پنل مدیریت" and m.from_user.id == ADMIN_ID)
-def admin_panel(message):
+def admin_p(message):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.row("📣 ارسال همگانی", "📊 آمار")
-    markup.row("🔙 بازگشت")
+    markup.add("📣 ارسال همگانی", "📊 آمار", "🔙 بازگشت")
     bot.send_message(ADMIN_ID, "🛠 پنل مدیریت:", reply_markup=markup)
 
-@bot.message_handler(func=lambda m: m.text == "📊 آمار" and m.from_user.id == ADMIN_ID)
-def admin_stats(message):
-    bot.send_message(ADMIN_ID, f"👥 کل کاربران: {len(get_all_users())}")
-
-@bot.message_handler(func=lambda m: m.text == "📣 ارسال همگانی" and m.from_user.id == ADMIN_ID)
-def admin_broadcast(message):
-    msg = bot.send_message(ADMIN_ID, "پیام را بفرستید:")
-    bot.register_next_step_handler(msg, broadcast_now)
-
-def broadcast_now(message):
-    if message.text == "🔙 بازگشت": admin_panel(message); return
-    users = get_all_users()
-    for u in users:
-        try: bot.copy_message(u, message.chat.id, message.message_id)
-        except: pass
-    bot.send_message(ADMIN_ID, "✅ پیام ارسال شد.")
-
-@bot.message_handler(func=lambda m: m.text == "🔙 بازگشت")
-def back_btn(message):
-    start(message)
-
-# ================== موتور جستجو ==================
-
 @bot.message_handler(func=lambda m: True)
-def auto_search(message):
+def search_handler(message):
     query = message.text
     if len(query) < 2: return
+    r = requests.get(f"https://banehstoore.ir/search?q={query.replace(' ', '+')}", headers=HEADERS)
+    soup = BeautifulSoup(r.text, "html.parser")
+    products = []
+    for link in soup.find_all('a', href=re.compile(r'/product/')):
+        title = link.get_text(strip=True)
+        url = link.get('href')
+        if url.startswith('/'): url = f"https://banehstoore.ir{url}"
+        if title and not any(p['url'] == url for p in products): products.append({"title": title, "url": url})
     
-    bot.send_chat_action(message.chat.id, 'typing')
-    results = search_in_site(query)
-    
-    if results:
+    if products:
         markup = types.InlineKeyboardMarkup(row_width=1)
-        for res in results:
-            markup.add(types.InlineKeyboardButton(res['title'], url=res['url']))
-        bot.send_message(message.chat.id, f"✅ نتایج برای '{query}':", reply_markup=markup)
-    else:
-        bot.send_message(message.chat.id, "❌ موردی یافت نشد.")
+        for p in products[:10]: markup.add(types.InlineKeyboardButton(p['title'], url=p['url']))
+        bot.send_message(message.chat.id, f"✅ نتایج یافت شده برای '{query}':", reply_markup=markup)
 
-@bot.callback_query_handler(func=lambda call: call.data == "call_admin")
-def call_back(call):
-    bot.send_message(call.message.chat.id, f"📱 شماره تماس:\n`{PHONE_NUMBER}`", parse_mode="Markdown")
-
-# ================== سرور ==================
+# ================== وب‌هوک ==================
 @app.route('/' + BOT_TOKEN, methods=['POST'])
 def getMessage():
     bot.process_new_updates([telebot.types.Update.de_json(request.get_data().decode('utf-8'))])
@@ -201,7 +171,7 @@ def getMessage():
 @app.route("/")
 def webhook():
     bot.remove_webhook(); bot.set_webhook(url=RENDER_URL + '/' + BOT_TOKEN)
-    return "<h1>Baneh Stoore Search Fixed!</h1>", 200
+    return "<h1>Order Details Integrated!</h1>", 200
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))

@@ -5,7 +5,7 @@ from bs4 import BeautifulSoup
 import os
 import re
 import html
-import sqlite3 # یا کتابخانه دیتابیس مورد نظر شما
+import sqlite3
 from flask import Flask, request
 
 # ================== تنظیمات اصلی ==================
@@ -20,10 +20,12 @@ PHONE_NUMBER = "09180514202"
 bot = telebot.TeleBot(BOT_TOKEN, threaded=True)
 app = Flask(__name__)
 
-# هدر برای استخراج اطلاعات (فقط هنگام ثبت توسط ادمین استفاده می‌شود)
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
-    "Cookie": MY_COOKIE
+    "Cookie": MY_COOKIE,
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "fa-IR,fa;q=0.9,en-US;q=0.8",
+    "Referer": "https://banehstoore.ir/profile/orders/"
 }
 
 # ================== مدیریت دیتابیس ==================
@@ -52,38 +54,59 @@ def get_order_from_db(order_id):
 
 init_db()
 
-# ================== تابع استخراج اطلاعات از لینک ==================
+# ================== تابع استخراج دقیق اطلاعات ==================
 def scrape_and_store(url):
     try:
-        # استخراج شماره سفارش از انتهای لینک
-        order_id = url.strip().split('/')[-2]
-        if not order_id.isdigit():
-            order_id = url.strip().split('/')[-1]
+        # استخراج شماره سفارش از لینک
+        match = re.search(r'order-details/(\d+)', url)
+        order_id = match.group(1) if match else url.strip().split('/')[-1]
 
-        response = requests.get(url, headers=HEADERS, timeout=20)
-        if response.status_code != 200:
-            return None, "❌ خطا در اتصال به سایت (کد وضعیت: {})".format(response.status_code)
+        response = requests.get(url, headers=HEADERS, timeout=25)
+        if "login" in response.url or response.status_code != 200:
+            return None, "❌ عدم دسترسی (کوکی منقضی شده یا اشتباه است)"
 
         soup = BeautifulSoup(response.text, "html.parser")
         
-        # استخراج داده‌ها بر اساس ساختار سایت شما
-        def get_text(label):
-            target = soup.find(string=re.compile(label))
-            return target.parent.get_text().replace(label, "").replace(":", "").strip() if target else "یافت نشد"
+        # متد جدید برای پیدا کردن مقدار بر اساس لایبل در سایت‌های Django/WP
+        def find_value(label_text):
+            # پیدا کردن تگی که شامل متن لایبل است
+            element = soup.find(string=re.compile(label_text))
+            if element:
+                # معمولاً مقدار در تگ والد یا تگ بعدی است
+                parent_text = element.parent.get_text(strip=True)
+                # حذف خود لایبل از متن برای رسیدن به مقدار
+                value = parent_text.replace(label_text, "").replace(":", "").replace("：", "").strip()
+                if value: return html.escape(value)
+                
+                # اگر در تگ والد نبود، تگ بعدی را چک کن
+                nxt = element.find_next()
+                if nxt: return html.escape(nxt.get_text(strip=True))
+            return "یافت نشد"
 
-        receiver = get_text("تحویل گیرنده")
-        address = get_text("ارسال به")
-        price = get_text("مبلغ کل")
-        status = get_text("وضعیت")
+        receiver = find_value("تحویل گیرنده")
+        phone = find_value("شماره تماس")
+        address = find_value("ارسال به")
+        price = find_value("مبلغ کل")
+        status = find_value("وضعیت")
 
-        invoice_content = f"👤 **تحویل گیرنده:** {receiver}\n📍 **آدرس:** {address}\n💰 **مبلغ:** {price}\n🚩 **وضعیت:** {status}"
+        # اگر همه یافت نشد شدند، احتمالاً ساختار عوض شده یا دسترسی نیست
+        if receiver == "یافت نشد" and price == "یافت نشد":
+            return None, "❌ اطلاعات در صفحه یافت نشد. ساختار سایت تغییر کرده است."
+
+        invoice_content = (
+            f"👤 **تحویل گیرنده:** {receiver}\n"
+            f"📞 **شماره تماس:** {phone}\n"
+            f"📍 **آدرس:** {address}\n"
+            f"💰 **مبلغ کل:** {price}\n"
+            f"🚩 **وضعیت:** {status}"
+        )
         
         save_order_to_db(order_id, invoice_content)
         return order_id, invoice_content
     except Exception as e:
-        return None, str(e)
+        return None, f"خطای فنی: {str(e)}"
 
-# ================== کیبورد و هندلرها ==================
+# ================== هندلرها و کیبورد ==================
 def get_main_keyboard(user_id):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.row("🛒 محصولات", "🔍 جستجوی محصول")
@@ -94,41 +117,39 @@ def get_main_keyboard(user_id):
 
 @bot.message_handler(commands=['start'])
 def start(message):
-    bot.send_message(message.chat.id, "👋 به ربات بانه استور خوش آمدید", reply_markup=get_main_keyboard(message.from_user.id))
+    bot.send_message(message.chat.id, "👋 خوش آمدید به بانه استور", reply_markup=get_main_keyboard(message.from_user.id))
 
-# --- بخش ادمین (ثبت با لینک) ---
 @bot.message_handler(func=lambda m: m.text == "📥 ثبت لینک سفارش (ادمین)" and m.from_user.id == ADMIN_ID)
-def admin_link_req(message):
-    msg = bot.send_message(message.chat.id, "🔗 لطفاً لینک کامل صفحه سفارش را بفرستید:")
+def admin_ask_link(message):
+    msg = bot.send_message(message.chat.id, "🔗 لینک سفارش را بفرستید تا در دیتابیس ذخیره شود:")
     bot.register_next_step_handler(msg, process_admin_link)
 
 def process_admin_link(message):
     url = message.text.strip()
     if "banehstoore.ir" in url:
-        bot.send_message(message.chat.id, "⏳ در حال استخراج و ذخیره در دیتابیس...")
+        bot.send_message(message.chat.id, "⏳ در حال استخراج و ذخیره...")
         oid, res = scrape_and_store(url)
         if oid:
-            bot.send_message(message.chat.id, f"✅ سفارش شماره {oid} با موفقیت در دیتابیس ذخیره شد.")
+            bot.send_message(message.chat.id, f"✅ سفارش {oid} ذخیره شد:\n\n{res}", parse_mode="Markdown")
         else:
-            bot.send_message(message.chat.id, f"❌ خطا: {res}")
+            bot.send_message(message.chat.id, res)
     else:
-        bot.send_message(message.chat.id, "❌ لینک معتبر نیست.")
+        bot.send_message(message.chat.id, "❌ لینک اشتباه است.")
 
-# --- بخش مشتری (مشاهده از دیتابیس) ---
 @bot.message_handler(func=lambda m: m.text == "📦 پیگیری سفارش")
-def track_start(message):
-    msg = bot.send_message(message.chat.id, "🔢 شماره سفارش خود را وارد کنید:", reply_markup=types.ReplyKeyboardRemove())
-    bot.register_next_step_handler(msg, show_order_details)
+def track_input(message):
+    msg = bot.send_message(message.chat.id, "🔢 شماره سفارش را وارد کنید:", reply_markup=types.ReplyKeyboardRemove())
+    bot.register_next_step_handler(msg, show_invoice)
 
-def show_order_details(message):
+def show_invoice(message):
     oid = message.text.strip()
     content = get_order_from_db(oid)
     if content:
-        bot.send_message(message.chat.id, f"📑 **فاکتور شماره {oid}**\n\n{content}\n\n✅ بانه استور", reply_markup=get_main_keyboard(message.from_user.id))
+        bot.send_message(message.chat.id, f"📑 **فاکتور شماره {oid}**\n\n{content}\n\n✅ بانه استور", parse_mode="Markdown", reply_markup=get_main_keyboard(message.from_user.id))
     else:
-        bot.send_message(message.chat.id, "❌ این سفارش هنوز ثبت نشده است. لطفاً با پشتیبانی تماس بگیرید.", reply_markup=get_main_keyboard(message.from_user.id))
+        bot.send_message(message.chat.id, "❌ این شماره سفارش در دیتابیس ما ثبت نشده است.", reply_markup=get_main_keyboard(message.from_user.id))
 
-# سایر دکمه‌ها (بدون تغییر)
+# سایر دکمه‌ها
 @bot.message_handler(func=lambda m: m.text == "🛒 محصولات")
 def p(m): bot.send_message(m.chat.id, "🛒 https://banehstoore.ir/products")
 
@@ -147,7 +168,7 @@ def getMessage():
 @app.route("/")
 def webhook():
     bot.remove_webhook(); bot.set_webhook(url=RENDER_URL + '/' + BOT_TOKEN)
-    return "<h1>Database Sync Active</h1>", 200
+    return "<h1>Bot is Active</h1>", 200
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))

@@ -28,7 +28,7 @@ def get_db_connection():
 def save_user(user_id):
     try:
         conn = get_db_connection(); cur = conn.cursor()
-        cur.execute('CREATE TABLE IF NOT EXISTS users (user_id BIGINT PRIMARY KEY)')
+        cur.execute('INSERT INTO users (user_id) VALUES (%s) ON CONFLICT (user_id) DO NOTHING', (user_id,))
         conn.commit(); cur.close(); conn.close()
     except: pass
 
@@ -68,7 +68,7 @@ def get_main_keyboard(user_id):
         markup.row("🛠 پنل مدیریت")
     return markup
 
-# ================== هندلرهای دکمه‌های ثابت ==================
+# ================== هندلرهای اصلی ==================
 
 @bot.message_handler(commands=['start'])
 def start(message):
@@ -105,7 +105,7 @@ def channel_btn(message):
 def search_btn_hint(message):
     bot.send_message(message.chat.id, "🔎 نام محصول مورد نظر را تایپ کنید:")
 
-# ================== بخش پیگیری سفارش (اصلاح شده) ==================
+# ================== بخش پیگیری سفارش (اصلاح شده برای میکسین) ==================
 
 @bot.message_handler(func=lambda m: m.text == "📦 پیگیری سفارش")
 def track_order_start(message):
@@ -114,9 +114,9 @@ def track_order_start(message):
 
 def track_order_result(message):
     order_id = message.text.strip()
-    # اگر کاربر به جای عدد، دکمه دیگری را زد یا متن فرستاد
+    
+    # خروج از حالت پیگیری در صورت کلیک روی دکمه‌های اصلی
     if order_id in ["🛒 محصولات", "🔍 جستجوی محصول", "📦 پیگیری سفارش", "📞 پشتیبانی و تماس", "📢 کانال فروشگاه"]:
-        # لغو پیگیری و اجرای دستور دکمه
         if order_id == "🛒 محصولات": products_btn(message)
         elif order_id == "🔍 جستجوی محصول": search_btn_hint(message)
         elif order_id == "📦 پیگیری سفارش": track_order_start(message)
@@ -124,20 +124,21 @@ def track_order_result(message):
         elif order_id == "📢 کانال فروشگاه": channel_btn(message)
         return
 
-    # بررسی اینکه آیا ورودی عدد است (شماره سفارش)
     if order_id.isdigit():
-        track_url = f"https://banehstoore.ir/order/track/{order_id}"
+        # اصلاح آدرس طبق ساختار استاندارد میکسین (استفاده از کوئری پارامتر)
+        track_url = f"https://banehstoore.ir/order/track?id={order_id}"
+        
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("🌐 مشاهده وضعیت در سایت", url=track_url))
         
         bot.send_message(
             message.chat.id, 
-            f"📦 **اطلاعات پیگیری سفارش {order_id}:**\n\nبرای مشاهده وضعیت لحظه‌ای و جزئیات سفارش خود روی دکمه زیر کلیک کنید:",
+            f"📦 **درخواست پیگیری برای سفارش {order_id}**\n\nبرای مشاهده وضعیت سفارش و کد رهگیری پستی، روی دکمه زیر کلیک کنید:",
             reply_markup=markup,
             parse_mode="Markdown"
         )
     else:
-        bot.send_message(message.chat.id, "❌ شماره سفارش نامعتبر است. لطفاً فقط عدد وارد کنید.")
+        bot.send_message(message.chat.id, "❌ شماره سفارش باید فقط عدد باشد.")
 
 # ================== پنل مدیریت ==================
 
@@ -169,7 +170,7 @@ def broadcast_now(message):
 def back_btn(message):
     start(message)
 
-# ================== موتور جستجو (فقط پیام‌های عادی) ==================
+# ================== موتور جستجو ==================
 
 @bot.message_handler(func=lambda m: True)
 def auto_search(message):
@@ -183,13 +184,13 @@ def auto_search(message):
         markup = types.InlineKeyboardMarkup(row_width=1)
         for res in results:
             markup.add(types.InlineKeyboardButton(res['title'], url=res['url']))
-        bot.send_message(message.chat.id, f"✅ نتایج یافت شده برای '{query}':", reply_markup=markup)
+        bot.send_message(message.chat.id, f"✅ نتایج برای '{query}':", reply_markup=markup)
     else:
-        bot.send_message(message.chat.id, "❌ موردی یافت نشد. لطفاً نام محصول را دقیق‌تر وارد کنید.")
+        bot.send_message(message.chat.id, "❌ موردی یافت نشد.")
 
 @bot.callback_query_handler(func=lambda call: call.data == "call_admin")
 def call_back(call):
-    bot.send_message(call.message.chat.id, f"📱 شماره تماس ادمین:\n`{PHONE_NUMBER}`", parse_mode="Markdown")
+    bot.send_message(call.message.chat.id, f"📱 شماره تماس:\n`{PHONE_NUMBER}`", parse_mode="Markdown")
 
 # ================== سرور ==================
 @app.route('/' + BOT_TOKEN, methods=['POST'])
@@ -200,7 +201,7 @@ def getMessage():
 @app.route("/")
 def webhook():
     bot.remove_webhook(); bot.set_webhook(url=RENDER_URL + '/' + BOT_TOKEN)
-    return "<h1>Baneh Stoore Fixed!</h1>", 200
+    return "<h1>Baneh Stoore Search Fixed!</h1>", 200
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))

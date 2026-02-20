@@ -1,38 +1,43 @@
 import telebot
 from telebot import types
 import os
-import psycopg2 # کتابخانه اتصال به دیتابیس
+import psycopg2
 from flask import Flask, request
 
 # ================== تنظیمات اصلی ==================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_ID = 6690559792 
 WHATSAPP = "09180514202"
+# آدرس جدید شما که در لاگ بود
+RENDER_URL = "https://telegram-bot-6-1qt1.onrender.com" 
 
-# لینک دیتابیس که از Supabase گرفتید را اینجا قرار دهید یا در Render ست کنید
-DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:[*Sirvan3840361915#]@db.zluohfoxkpeusmtjvsoo.supabase.co:5432/postgres")
+DATABASE_URL = os.environ.get("DATABASE_URL")
 
 bot = telebot.TeleBot(BOT_TOKEN, threaded=True)
 app = Flask(__name__)
 
-# ================== مدیریت دیتابیس (ضد پاک شدن) ==================
+# ================== مدیریت دیتابیس با مدیریت خطا ==================
+def get_db_connection():
+    try:
+        # اتصال با پارامترهای اضافه برای پایداری در رندر
+        conn = psycopg2.connect(DATABASE_URL, sslmode='require', connect_timeout=10)
+        return conn
+    except Exception as e:
+        print(f"❌ Database Connection Error: {e}")
+        return None
+
 def init_db():
-    """ساخت جدول کاربران در صورت عدم وجود"""
-    conn = psycopg2.connect(DATABASE_URL)
-    cur = conn.cursor()
-    cur.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            user_id BIGINT PRIMARY KEY,
-            name TEXT,
-            phone TEXT
-        )
-    ''')
-    conn.commit()
-    cur.close()
-    conn.close()
+    conn = get_db_connection()
+    if conn:
+        cur = conn.cursor()
+        cur.execute('''CREATE TABLE IF NOT EXISTS users (user_id BIGINT PRIMARY KEY, name TEXT, phone TEXT)''')
+        conn.commit()
+        cur.close()
+        conn.close()
 
 def is_user_registered(user_id):
-    conn = psycopg2.connect(DATABASE_URL)
+    conn = get_db_connection()
+    if not conn: return False # اگر دیتابیس قطع بود، فرض میکنیم ثبت نام نکرده تا ربات کار کند
     cur = conn.cursor()
     cur.execute("SELECT user_id FROM users WHERE user_id = %s", (user_id,))
     result = cur.fetchone()
@@ -41,21 +46,20 @@ def is_user_registered(user_id):
     return result is not None
 
 def save_user_to_db(user_id, name, phone):
-    if not is_user_registered(user_id):
-        conn = psycopg2.connect(DATABASE_URL)
+    conn = get_db_connection()
+    if conn:
         cur = conn.cursor()
-        cur.execute("INSERT INTO users (user_id, name, phone) VALUES (%s, %s, %s)", (user_id, name, phone))
-        conn.commit()
+        try:
+            cur.execute("INSERT INTO users (user_id, name, phone) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING", (user_id, name, phone))
+            conn.commit()
+        except: pass
         cur.close()
         conn.close()
 
-# اجرای اولیه برای ساخت جدول
-try:
-    init_db()
-except Exception as e:
-    print(f"Database Error: {e}")
+# اجرای اولیه
+init_db()
 
-# ================== بخش مدیریت پیام‌ها (بدون تغییر در منطق) ==================
+# ================== بخش پیام‌ها (ثابت) ==================
 
 @bot.message_handler(commands=['start'])
 def start(message):
@@ -86,9 +90,8 @@ def get_phone(message, user_full_name):
     bot.send_message(ADMIN_ID, f"👤 **مشتری جدید!**\n📝 نام: {user_full_name}\n📞 شماره: {phone}")
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add("🛒 محصولات", "📞 پشتیبانی")
-    bot.send_message(message.chat.id, "✅ ثبت‌نام شما با موفقیت انجام شد.", reply_markup=markup)
+    bot.send_message(message.chat.id, "✅ ثبت‌نام انجام شد.", reply_markup=markup)
 
-# ================== بخش پشتیبانی و محصولات (ثابت) ==================
 @bot.message_handler(func=lambda m: m.text == "📞 پشتیبانی")
 def support(message):
     markup = types.InlineKeyboardMarkup()
@@ -102,7 +105,7 @@ def products(message):
         types.InlineKeyboardButton("☕ اسپرسوساز", url="https://banehstoore.ir/product-category/espresso-maker"),
         types.InlineKeyboardButton("🍟 سرخ‌کن", url="https://banehstoore.ir/product-category/air-fryer")
     )
-    bot.send_message(message.chat.id, "🛒 محصولات بانه استور:", reply_markup=markup)
+    bot.send_message(message.chat.id, "🛒 محصولات:", reply_markup=markup)
 
 # ================== وب‌هوک ==================
 @app.route('/' + BOT_TOKEN, methods=['POST'])
@@ -113,8 +116,8 @@ def getMessage():
 @app.route("/")
 def webhook():
     bot.remove_webhook()
-    bot.set_webhook(url='https://telegram-bot-6-1qt1.onrender.com/' + BOT_TOKEN)
-    return "<h1>Bot is Running with Supabase!</h1>", 200
+    bot.set_webhook(url=RENDER_URL + '/' + BOT_TOKEN)
+    return "<h1>Bot is Active!</h1>", 200
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))

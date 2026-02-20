@@ -36,41 +36,51 @@ init_db()
 
 # ================== توابع بخش مشتریان (Mixin API) ==================
 def fetch_mixin_customers():
-    """دریافت لیست مشتریان از API میکسین"""
-    url = "https://docs.mixin.ir/api/management/v1/customers/"
+    """دریافت لیست مشتریان با آدرس اصلاح شده"""
+    # نکته: آدرس زیر را بر اساس دامنه اصلی سایت خودتان تغییر دهید
+    # اگر آدرس سایت شما مثلا banehstoore.ir است، از آن استفاده کنید
+    BASE_URL = "https://banehstoore.ir" # یا آدرسی که میکسین به شما داده
+    url = f"{BASE_URL}/api/management/v1/customers/"
+    
     headers = {
         'Authorization': f'Api-Key {MIXIN_API_KEY}',
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
     }
     
     try:
+        # لاگ برای دیباگ در کنسول رندر
+        print(f"Requesting to: {url}")
+        
         response = requests.get(url, headers=headers, timeout=15)
+        
         if response.status_code == 200:
             data = response.json()
+            # طبق مستندات تصویر ۳، نتایج در فیلد results هستند
             customers = data.get('results', [])
-            total_count = data.get('count', len(customers))
             
             if not customers:
                 return "📭 لیست مشتریان در حال حاضر خالی است."
             
-            report = f"👥 **لیست آخرین مشتریان سایت**\n"
-            report += f"📊 تعداد کل: {total_count}\n"
+            report = f"👥 **لیست مشتریان (بروزرسانی شده)**\n"
             report += "━━━━━━━━━━━━━━━\n"
             
-            # نمایش ۵ مشتری آخر برای جلوگیری از طولانی شدن پیام
-            for person in customers[:5]:
-                name = person.get('first_name', 'نامشخص')
+            for person in customers[:10]: # نمایش ۱۰ نفر آخر
+                # نام فیلدها را بر اساس خروجی JSON (تصویر ۳) تنظیم کنید
+                name = person.get('first_name', 'کاربر')
                 last_name = person.get('last_name', '')
-                phone = person.get('phone_number', 'بدون شماره')
-                report += f"👤 {name} {last_name}\n📞 {phone}\n\n"
+                username = person.get('username', '---')
+                report += f"👤 {name} {last_name}\n🆔 @{username}\n\n"
             
-            report += "━━━━━━━━━━━━━━━\n✅ بانه استور"
             return report
+        elif response.status_code == 404:
+            return "❌ **خطای 404:** آدرس API پیدا نشد. لطفاً آدرس سایت (BASE_URL) را در کد چک کنید."
+        elif response.status_code == 401:
+            return "❌ **خطای 401:** توکن API معتبر نیست."
         else:
-            return f"❌ خطا در اتصال به API میکسین (کد: {response.status_code})"
+            return f"❌ خطا با کد: {response.status_code}"
     except Exception as e:
-        return f"⚠️ خطای فنی در دریافت لیست: {str(e)}"
-
+        return f"⚠️ خطای ارتباطی: {str(e)}"
 # ================== استخراج‌گر هوشمند فاکتور (حفظ شده از قبل) ==================
 def smart_extract(raw_text):
     try:

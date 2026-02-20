@@ -113,7 +113,7 @@ def getMessage():
 @app.route("/")
 def webhook():
     bot.remove_webhook()
-    bot.set_webhook(url='https://telegram-bot-5-qw7c.onrender.com/' + BOT_TOKEN)
+    bot.set_webhook(url='https://telegram-bot-6-1qt1.onrender.com/' + BOT_TOKEN)
     return "<h1>Bot is Running with Supabase!</h1>", 200
 
 if __name__ == "__main__":

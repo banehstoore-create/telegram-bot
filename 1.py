@@ -57,8 +57,19 @@ def get_all_users():
         return users
     except: return []
 
-# ایجاد جدول در دیتابیس هنگام شروع
 init_db()
+
+# ================== تابع منوی هوشمند ==================
+def get_main_keyboard(user_id):
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add("🛒 محصولات", "📞 پشتیبانی و تماس")
+    markup.add("📢 کانال فروشگاه")
+    
+    # اگر کاربر ادمین بود، دکمه مدیریت را اضافه کن
+    if user_id == ADMIN_ID:
+        markup.add("🛠 پنل مدیریت")
+        
+    return markup
 
 # ================== توابع محصول ==================
 def fetch_product(url):
@@ -77,15 +88,11 @@ def fetch_product(url):
 
 @bot.message_handler(commands=['start'])
 def start(message):
-    save_user(message.from_user.id) # ذخیره کاربر در Neon
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.add("🛒 محصولات", "📞 پشتیبانی و تماس")
-    markup.add("📢 کانال فروشگاه")
-    
+    save_user(message.from_user.id)
     bot.send_message(
         message.chat.id,
-        "👋 به ربات بانه استور خوش آمدید\nبرای مشاهده محصولات یا ارتباط با ما از منوی زیر استفاده کنید:",
-        reply_markup=markup
+        "👋 به ربات بانه استور خوش آمدید\nلطفاً از منوی زیر استفاده کنید:",
+        reply_markup=get_main_keyboard(message.from_user.id)
     )
 
 @bot.message_handler(func=lambda m: m.text == "🛒 محصولات")
@@ -95,12 +102,6 @@ def products_menu(message):
         types.InlineKeyboardButton("☕ اسپرسوساز", url="https://banehstoore.ir/product-category/espresso-maker/"),
         types.InlineKeyboardButton("🍟 سرخ‌کن", url="https://banehstoore.ir/product-category/air-fryer/"),
         types.InlineKeyboardButton("🧹 جاروبرقی", url="https://banehstoore.ir/product-category/vacuum-cleaner/"),
-        types.InlineKeyboardButton("🍲 غذاساز و خردکن", url="https://banehstoore.ir/product-category/food-processor/"),
-        types.InlineKeyboardButton("🍳 لوازم پخت و پز", url="https://banehstoore.ir/product-category/cookware/"),
-        types.InlineKeyboardButton("🍹 آبمیوه‌گیری", url="https://banehstoore.ir/product-category/appliance/juicer/"),
-        types.InlineKeyboardButton("📺 صوتی و تصویری", url="https://banehstoore.ir/product-category/video-audio/"),
-        types.InlineKeyboardButton("🧺 شستشو و نظافت", url="https://banehstoore.ir/product-category/washing-machine-dishwasher/"),
-        types.InlineKeyboardButton("🧊 یخچال فریزر", url="https://banehstoore.ir/product-category/refrigerator-freezer/"),
         types.InlineKeyboardButton("🛍 مشاهده همه محصولات", url="https://banehstoore.ir/shop/")
     )
     bot.send_message(message.chat.id, "🛒 **دسته‌بندی‌های محصولات:**", reply_markup=markup, parse_mode="Markdown")
@@ -111,9 +112,9 @@ def support_menu(message):
     markup.add(
         types.InlineKeyboardButton("📞 تماس مستقیم", callback_data="call_us"),
         types.InlineKeyboardButton("💬 پیام در واتساپ", url=f"https://wa.me/98{WHATSAPP[1:]}"),
-        types.InlineKeyboardButton("📍 آدرس فروشگاه (روی نقشه)", url=MAP_URL)
+        types.InlineKeyboardButton("📍 آدرس فروشگاه", url=MAP_URL)
     )
-    bot.send_message(message.chat.id, "📞 راه‌های ارتباطی با بانه استور:", reply_markup=markup)
+    bot.send_message(message.chat.id, "📞 راه‌های ارتباطی با ما:", reply_markup=markup)
 
 @bot.callback_query_handler(func=lambda call: call.data == "call_us")
 def call_contact(call):
@@ -123,28 +124,27 @@ def call_contact(call):
 @bot.message_handler(func=lambda m: m.text == "📢 کانال فروشگاه")
 def channel_info(message):
     markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("🔗 عضویت در کانال", url=f"https://t.me/{CHANNEL_ID[1:]}"))
+    markup.add(types.InlineKeyboardButton("🔗 ورود به کانال", url=f"https://t.me/{CHANNEL_ID[1:]}"))
     bot.send_message(message.chat.id, f"📢 کانال تلگرام ما:\n{CHANNEL_ID}", reply_markup=markup)
 
-# ================== پنل مدیریت اختصاصی ادمین ==================
+# ================== بخش مدیریت (فقط برای ادمین) ==================
 
-@bot.message_handler(commands=['admin'])
+@bot.message_handler(func=lambda m: m.text == "🛠 پنل مدیریت" and m.from_user.id == ADMIN_ID)
 def admin_panel(message):
-    if message.from_user.id == ADMIN_ID:
-        users = get_all_users()
-        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-        markup.add("📣 ارسال پیام همگانی", "📊 آمار کاربران")
-        markup.add("🔙 بازگشت به منوی اصلی")
-        bot.send_message(message.chat.id, f"🛠 **پنل مدیریت**\nتعداد کاربران در دیتابیس: `{len(users)}`", reply_markup=markup, parse_mode="Markdown")
+    users = get_all_users()
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add("📣 ارسال پیام همگانی", "📊 آمار کاربران")
+    markup.add("🔙 بازگشت به منوی اصلی")
+    bot.send_message(message.chat.id, f"🛠 **خوش آمدید ادمین عزیز**\nتعداد کاربران فعال: `{len(users)}`", reply_markup=markup, parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text == "📊 آمار کاربران" and m.from_user.id == ADMIN_ID)
 def stats(message):
     users = get_all_users()
-    bot.send_message(message.chat.id, f"👥 تعداد کل کاربران ثبت شده: `{len(users)}`", parse_mode="Markdown")
+    bot.send_message(message.chat.id, f"👥 تعداد کل کاربران ثبت شده در دیتابیس: `{len(users)}`", parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text == "📣 ارسال پیام همگانی" and m.from_user.id == ADMIN_ID)
 def broadcast_prompt(message):
-    msg = bot.send_message(message.chat.id, "لطفاً پیام خود را (متن، عکس، فایل یا کد تخفیف) بفرستید:")
+    msg = bot.send_message(message.chat.id, "لطفاً پیام خود را (متن، عکس یا کد تخفیف) بفرستید تا برای همه ارسال شود:")
     bot.register_next_step_handler(msg, do_broadcast)
 
 def do_broadcast(message):
@@ -155,13 +155,13 @@ def do_broadcast(message):
             bot.copy_message(uid, message.chat.id, message.message_id)
             success += 1
         except: pass
-    bot.send_message(ADMIN_ID, f"✅ پیام شما با موفقیت برای {success} نفر ارسال شد.")
+    bot.send_message(ADMIN_ID, f"✅ پیام برای {success} نفر با موفقیت ارسال شد.")
 
 @bot.message_handler(func=lambda m: m.text == "🔙 بازگشت به منوی اصلی")
 def back_home(message):
-    start(message)
+    bot.send_message(message.chat.id, "منوی اصلی:", reply_markup=get_main_keyboard(message.from_user.id))
 
-# ================== ارسال محصول به کانال (هوشمند) ==================
+# ================== ارسال محصول به کانال ==================
 
 @bot.message_handler(func=lambda m: m.from_user.id == ADMIN_ID and "banehstoore.ir" in (m.text or ""))
 def admin_post_product(message):
@@ -171,7 +171,7 @@ def admin_post_product(message):
         data = fetch_product(url)
         if data:
             title, image, price, stock = data
-            caption = f"🛍 **{title}**\n\n💰 قیمت: {price}\n📦 وضعیت: {stock}\n\n✅ ضمانت اصالت کالا\n🚚 ارسال به سراسر کشور\n🤝 خرید مطمئن از بانه استور\n\n🆔 {CHANNEL_ID}"
+            caption = f"🛍 **{title}**\n\n💰 قیمت: {price}\n📦 وضعیت: {stock}\n\n🆔 {CHANNEL_ID}"
             markup = types.InlineKeyboardMarkup()
             markup.add(types.InlineKeyboardButton("🛒 خرید از سایت", url=url),
                        types.InlineKeyboardButton("📲 مشاوره و سفارش", url=f"https://wa.me/98{WHATSAPP[1:]}"))
@@ -179,11 +179,11 @@ def admin_post_product(message):
                 bot.send_photo(CHANNEL_ID, image, caption=caption, parse_mode="Markdown", reply_markup=markup)
             else:
                 bot.send_message(CHANNEL_ID, caption, parse_mode="Markdown", reply_markup=markup)
-            bot.send_message(message.chat.id, "✅ محصول در کانال منتشر شد.")
+            bot.send_message(message.chat.id, "✅ با موفقیت در کانال منتشر شد.")
     except Exception as e:
         bot.send_message(message.chat.id, f"❌ خطا: {e}")
 
-# ================== تنظیمات وب‌هوک و سرور ==================
+# ================== وب‌هوک و سرور ==================
 
 @app.route('/' + BOT_TOKEN, methods=['POST'])
 def getMessage():
@@ -196,7 +196,7 @@ def getMessage():
 def webhook():
     bot.remove_webhook()
     bot.set_webhook(url=RENDER_URL + '/' + BOT_TOKEN)
-    return "<h1>Baneh Stoore Bot is LIVE with Neon DB!</h1>", 200
+    return "<h1>Bot is Active with Admin Button!</h1>", 200
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))

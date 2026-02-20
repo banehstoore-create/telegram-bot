@@ -10,7 +10,7 @@ ADMIN_ID = 6690559792
 WHATSAPP = "09180514202"
 
 # لینک دیتابیس که از Supabase گرفتید را اینجا قرار دهید یا در Render ست کنید
-DATABASE_URL = os.environ.get("DATABASE_URL", "لینک_دیتابیس_شما")
+DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres:[*Sirvan3840361915#]@db.zluohfoxkpeusmtjvsoo.supabase.co:5432/postgres")
 
 bot = telebot.TeleBot(BOT_TOKEN, threaded=True)
 app = Flask(__name__)

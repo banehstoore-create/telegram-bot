@@ -1,5 +1,1 @@
-pyTelegramBotAPI
-flask
-requests
-beautifulsoup4
-psycopg2-binary
+python-telegram-bot==20.x

@@ -1,112 +1,97 @@
 import os
 import logging
 import requests
+import threading
+from flask import Flask
 from bs4 import BeautifulSoup
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
 
-# تنظیمات لاگ
+# لاگ برای دیباگ
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
+# تنظیمات
 TOKEN = '8583608724:AAEeqgf5ki7fp_OuA07HZD2J0pVdWFONeSY'
 CHANNEL_ID = '@banehstoore'
 SITE_URL = 'https://banehstoore.ir'
 
-async def check_membership(context: ContextTypes.DEFAULT_TYPE, user_id: int):
+# --- بخش وب‌سرور برای جلوگیری از خطای Render ---
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is running..."
+
+def run_flask():
+    # Render پورت را در متغیر PORT قرار می‌دهد، اگر نبود روی 10000 اجرا می‌شود
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host='0.0.0.0', port=port)
+
+# --- بخش منطق ربات ---
+
+async def check_membership(context, user_id):
     try:
         member = await context.bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
         return member.status in ['member', 'administrator', 'creator']
-    except Exception as e:
-        logging.error(f"Membership error: {e}")
+    except Exception:
         return False
 
 def search_products(query):
-    """جستجو در سایت بانه استور و استخراج نام و لینک محصولات"""
     search_url = f"{SITE_URL}/?s={query}"
     headers = {'User-Agent': 'Mozilla/5.0'}
-    
     try:
         response = requests.get(search_url, headers=headers, timeout=10)
         soup = BeautifulSoup(response.text, 'html.parser')
-        
-        # پیدا کردن محصولات (با توجه به ساختار ووکامرس)
         products = []
-        # این بخش نام و لینک محصول را از تگ‌های سایت شما استخراج می‌کند
         items = soup.select('.product-title a') or soup.select('h2.woocommerce-loop-product__title a') or soup.select('.entry-title a')
-        
-        for item in items[:8]: # نمایش حداکثر 8 نتیجه اول
-            name = item.get_text().strip()
-            link = item.get('href')
-            if name and link:
-                products.append({'name': name, 'link': link})
+        for item in items[:8]:
+            products.append({'name': item.get_text().strip(), 'link': item.get('href')})
         return products
-    except Exception as e:
-        logging.error(f"Search error: {e}")
+    except:
         return []
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start(update, context):
     user = update.effective_user
-    is_member = await check_membership(context, user.id)
-    
-    if is_member:
-        await update.message.reply_text(
-            f"🛍 به بخش جستجوی محصولات **بانه استور** خوش آمدید!\n\n"
-            "لطفاً نام محصول مورد نظر خود را تایپ و ارسال کنید (مثلاً: تلویزیون سامسونگ)"
-        )
+    if await check_membership(context, user.id):
+        await update.message.reply_text(f"🛍 سلام {user.first_name}! نام محصول مورد نظر را بفرست تا در سایت بانه استور جستجو کنم.")
     else:
-        keyboard = [
-            [InlineKeyboardButton("📢 عضویت در کانال", url=f"https://t.me/banehstoore")],
-            [InlineKeyboardButton("✅ تایید عضویت", callback_data='verify_join')]
-        ]
-        await update.message.reply_text(
-            "لطفاً ابتدا در کانال عضو شوید:",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+        kb = [[InlineKeyboardButton("📢 عضویت در کانال", url="https://t.me/banehstoore")],
+              [InlineKeyboardButton("✅ تایید عضویت", callback_data='verify')]]
+        await update.message.reply_text("برای استفاده، ابتدا عضو شوید:", reply_markup=InlineKeyboardMarkup(kb))
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """مدیریت متن‌های ارسالی کاربر برای جستجو"""
-    user_id = update.effective_user.id
-    if not await check_membership(context, user_id):
+async def handle_message(update, context):
+    if not await check_membership(context, update.effective_user.id):
         await start(update, context)
         return
-
-    query = update.message.text
-    if len(query) < 2:
-        await update.message.reply_text("لطفاً عبارت طولانی‌تری برای جستجو وارد کنید.")
-        return
-
-    wait_msg = await update.message.reply_text("🔍 در حال جستجو در سایت بانه استور...")
     
+    query = update.message.text
+    wait = await update.message.reply_text("🔍 در حال جستجو...")
     results = search_products(query)
     
     if results:
-        keyboard = []
-        for res in results:
-            keyboard.append([InlineKeyboardButton(res['name'], url=res['link'])])
-        
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        await wait_msg.edit_text(
-            f"✅ نتایج یافت شده برای «{query}»:\nبرای مشاهده و خرید روی محصول کلیک کنید:",
-            reply_markup=reply_markup
-        )
+        kb = [[InlineKeyboardButton(r['name'], url=r['link'])] for r in results]
+        await wait.edit_text(f"✅ نتایج برای «{query}»:", reply_markup=InlineKeyboardMarkup(kb))
     else:
-        await wait_msg.edit_text("😔 متاسفانه محصولی با این نام در سایت پیدا نشد.")
+        await wait.edit_text("😔 محصولی یافت نشد.")
 
-async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def button(update, context):
     query = update.callback_query
     await query.answer()
-    if query.data == 'verify_join' and await check_membership(context, query.from_user.id):
-        await query.edit_message_text("عضویت تایید شد! حالا نام محصول را بفرستید.")
+    if query.data == 'verify' and await check_membership(context, query.from_user.id):
+        await query.edit_message_text("تایید شد! حالا نام محصول را بفرستید.")
 
 def main():
+    # ۱. اجرای وب‌سرور در یک ترد جداگانه
+    threading.Thread(target=run_flask, daemon=True).start()
+
+    # ۲. اجرای ربات
     application = Application.builder().token(TOKEN).build()
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(button_click))
-    # هندلر برای دریافت متن جستجو از کاربر
+    application.add_handler(CallbackQueryHandler(button))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    print("--- ربات بانه استور فعال شد ---")
-    application.run_polling()
+    print("--- Bot & Server started ---")
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
     main()

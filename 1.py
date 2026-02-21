@@ -10,7 +10,6 @@ from flask import Flask, request
 # ================== تنظیمات اصلی ==================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_ID = 6690559792 
-# در رندر، URL باید با https شروع شود
 RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://telegram-bot-6-1qt1.onrender.com")
 CHANNEL_ID = "@banehstoore"
 WHATSAPP = "09180514202"
@@ -21,7 +20,6 @@ app = Flask(__name__)
 
 # ================== مدیریت دیتابیس ==================
 def get_db_connection():
-    # استفاده از مسیر مطلق برای جلوگیری از خطای دسترسی در سرور
     db_path = os.path.join(os.getcwd(), 'baneh_orders.db')
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -40,7 +38,6 @@ def init_db():
 
 init_db()
 
-# ثبت کاربر
 def add_user(user_id):
     try:
         conn = get_db_connection()
@@ -67,21 +64,26 @@ def smart_extract(raw_text):
         status = fetch(r"وضعیت\s*[:：]\s*([^👤📍📞💰🚩\n]+)").replace("پرداخت شده", "").strip()
 
         formatted_details = (
-            f"👤 **خریدار:** {receiver}\n📞 **تماس:** {phone}\n📍 **نشانی:** {address}\n"
+            f"👤 **خریدار:** {receiver}\n📞 **تماس:** <code>{phone}</code>\n📍 **نشانی:** {address}\n"
             f"━━━━━━━━━━━━━━━\n💰 **مبلغ کل:** {total_price} تومان\n🚩 **وضعیت:** {status}"
         )
         
-        def get_live_prices():
-    # لیست منابع مختلف برای اطمینان از قطع نشدن سرویس
+        conn = get_db_connection()
+        conn.execute("INSERT OR REPLACE INTO orders (order_id, details) VALUES (?, ?)", (order_id, formatted_details))
+        conn.commit()
+        conn.close()
+        return order_id, formatted_details
+    except Exception as e: return None, f"⚠️ خطا: {str(e)}"
+
+def get_live_prices():
     sources = [
-        "https://api.tala.ir/v1/live", # منبع اول
-        "https://brsapi.ir/FreeTalaGold/api/get_stats", # منبع دوم
-        "https://api.nobitex.ir/v2/orderbook/USDTIRT" # منبع کمکی برای دلار
+        "https://api.tala.ir/v1/live",
+        "https://brsapi.ir/FreeTalaGold/api/get_stats",
+        "https://api.nobitex.ir/v2/orderbook/USDTIRT"
     ]
-    
     try:
-        # تلاش برای دریافت از منبع اصلی
-        response = requests.get(sources[1], timeout=7)
+        # استفاده از منبع دوم (brsapi)
+        response = requests.get(sources[1], timeout=10)
         if response.status_code == 200:
             res = response.json()
             gold = res['gold'][0]['price']
@@ -94,12 +96,11 @@ def smart_extract(raw_text):
             text += f"🇦🇪 درهم: {aed:,}\n"
             text += f"⚜️ طلای ۱۸ عیار: {gold:,}\n"
             text += "━━━━━━━━━━━━━━━\n"
-            text += f"⏰ بروزرسانی: {res['date']}\n"
-            text += "✅ بانه استور"
+            text += f"⏰ بروزرسانی: {res['date']}\n✅ بانه استور"
             return text
-    except Exception as e:
-        # اگر منبع دوم هم قطع بود، یک پیام محترمانه همراه با لینک منبع اصلی بدهد
-        return "⚠️ سرویس دریافت قیمت در حال بروزرسانی است.\n\n📈 برای مشاهده قیمت‌های لحظه‌ای می‌توانید به وب‌سایت‌های مرجع مراجعه کنید یا چند دقیقه دیگر مجدداً دکمه را بزنید."
+    except:
+        return "⚠️ سرویس دریافت قیمت موقتاً خارج از دسترس است. لطفا دقایقی دیگر امتحان کنید."
+
 # ================== هندلرها ==================
 def main_menu(user_id):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -116,6 +117,7 @@ def start(message):
 
 @bot.message_handler(func=lambda m: m.text == "💰 قیمت ارز و طلا")
 def show_prices(message):
+    bot.send_message(message.chat.id, "⏳ در حال استعلام...")
     bot.send_message(message.chat.id, get_live_prices(), parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text == "🛠 پنل مدیریت" and m.from_user.id == ADMIN_ID)
@@ -153,24 +155,35 @@ def show_invoice(message):
     except:
         bot.send_message(message.chat.id, "⚠️ خطای دیتابیس.", reply_markup=main_menu(message.from_user.id))
 
-# ارسال همگانی
 @bot.message_handler(func=lambda m: m.text == "📢 ارسال پیام همگانی" and m.from_user.id == ADMIN_ID)
 def broad_req(message):
-    msg = bot.send_message(message.chat.id, "📝 پیام خود را بفرستید:")
+    msg = bot.send_message(message.chat.id, "📝 پیام خود را برای ارسال به همه بفرستید:")
     bot.register_next_step_handler(msg, start_broad)
 
 def start_broad(message):
     conn = get_db_connection()
     users = conn.execute("SELECT user_id FROM users").fetchall()
     conn.close()
+    success = 0
     for u in users:
-        try: bot.send_message(u['user_id'], message.text); time.sleep(0.1)
+        try: 
+            bot.send_message(u['user_id'], message.text)
+            success += 1
+            time.sleep(0.1)
         except: pass
-    bot.send_message(message.chat.id, "✅ ارسال شد.")
+    bot.send_message(message.chat.id, f"✅ پیام با موفقیت به {success} نفر ارسال شد.")
+
+@bot.message_handler(func=lambda m: m.text == "📊 آمار ربات" and m.from_user.id == ADMIN_ID)
+def stats(message):
+    conn = get_db_connection()
+    u = conn.execute("SELECT count(*) FROM users").fetchone()[0]
+    o = conn.execute("SELECT count(*) FROM orders").fetchone()[0]
+    conn.close()
+    bot.send_message(message.chat.id, f"👥 تعداد کاربران: {u}\n📦 تعداد فاکتورها: {o}")
 
 @bot.message_handler(func=lambda m: m.text == "📥 ثبت سریع فاکتور" and m.from_user.id == ADMIN_ID)
 def admin_cap(message):
-    msg = bot.send_message(message.chat.id, "📑 متن سفارش را بفرستید:")
+    msg = bot.send_message(message.chat.id, "📑 متن سفارش کپی شده از سایت را بفرستید:")
     bot.register_next_step_handler(msg, proc_admin)
 
 def proc_admin(message):
@@ -196,6 +209,5 @@ def webhook():
     return "<h1>Bot is Running...</h1>", 200
 
 if __name__ == "__main__":
-    # رندر پورت را از Environment Variable می‌خواند
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)

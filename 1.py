@@ -71,23 +71,35 @@ def smart_extract(raw_text):
             f"━━━━━━━━━━━━━━━\n💰 **مبلغ کل:** {total_price} تومان\n🚩 **وضعیت:** {status}"
         )
         
-        conn = get_db_connection()
-        conn.execute("INSERT OR REPLACE INTO orders (order_id, details) VALUES (?, ?)", (order_id, formatted_details))
-        conn.commit()
-        conn.close()
-        return order_id, formatted_details
-    except Exception as e: return None, f"⚠️ خطا: {str(e)}"
-
-def get_live_prices():
+        def get_live_prices():
+    # لیست منابع مختلف برای اطمینان از قطع نشدن سرویس
+    sources = [
+        "https://api.tala.ir/v1/live", # منبع اول
+        "https://brsapi.ir/FreeTalaGold/api/get_stats", # منبع دوم
+        "https://api.nobitex.ir/v2/orderbook/USDTIRT" # منبع کمکی برای دلار
+    ]
+    
     try:
-        res = requests.get("https://brsapi.ir/FreeTalaGold/api/get_stats", timeout=10).json()
-        gold = res['gold'][0]['price']
-        usd = res['currency'][0]['price']
-        aed = res['currency'][2]['price']
-        text = f"💰 **قیمت لحظه‌ای (تومان):**\n━━━━━━━━━━━━━━━\n🇺🇸 دلار: {usd:,}\n🇦🇪 درهم: {aed:,}\n⚜️ طلا ۱۸: {gold:,}\n━━━━━━━━━━━━━━━\n⏰ {res['date']}"
-        return text
-    except: return "⚠️ سرویس قیمت‌دهی موقتاً در دسترس نیست."
-
+        # تلاش برای دریافت از منبع اصلی
+        response = requests.get(sources[1], timeout=7)
+        if response.status_code == 200:
+            res = response.json()
+            gold = res['gold'][0]['price']
+            usd = res['currency'][0]['price']
+            aed = res['currency'][2]['price']
+            
+            text = "💰 **قیمت لحظه‌ای بازار (تومان):**\n"
+            text += "━━━━━━━━━━━━━━━\n"
+            text += f"🇺🇸 دلار: {usd:,}\n"
+            text += f"🇦🇪 درهم: {aed:,}\n"
+            text += f"⚜️ طلای ۱۸ عیار: {gold:,}\n"
+            text += "━━━━━━━━━━━━━━━\n"
+            text += f"⏰ بروزرسانی: {res['date']}\n"
+            text += "✅ بانه استور"
+            return text
+    except Exception as e:
+        # اگر منبع دوم هم قطع بود، یک پیام محترمانه همراه با لینک منبع اصلی بدهد
+        return "⚠️ سرویس دریافت قیمت در حال بروزرسانی است.\n\n📈 برای مشاهده قیمت‌های لحظه‌ای می‌توانید به وب‌سایت‌های مرجع مراجعه کنید یا چند دقیقه دیگر مجدداً دکمه را بزنید."
 # ================== هندلرها ==================
 def main_menu(user_id):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)

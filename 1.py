@@ -1,77 +1,81 @@
-import telebot
-from telebot import types
 import os
-import re
-import sqlite3
-import time
-import requests
-from flask import Flask, request
+import logging
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
-# ================== تنظیمات اصلی (بدون تغییر) ==================
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-ADMIN_ID = 6690559792 
-RENDER_URL = os.environ.get("RENDER_EXTERNAL_URL", "https://telegram-bot-6-1qt1.onrender.com")
-CHANNEL_ID = "@banehstoore"
-WHATSAPP = "09180514202"
-PHONE_NUMBER = "09180514202"
+# تنظیمات لاگ برای مشاهده خطاها در پنل Render
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO
+)
 
-bot = telebot.TeleBot(BOT_TOKEN, threaded=True)
-app = Flask(__name__)
+# توکن و اطلاعات کانال
+# اگر در Render متغیر محیطی ست کردید، از خط پایین استفاده کنید:
+# TOKEN = os.getenv('BOT_TOKEN') 
+TOKEN = '8583608724:AAEeqgf5ki7fp_OuA07HZD2J0pVdWFONeSY'
+CHANNEL_ID = '@banehstoore'
 
-# ================== مدیریت دیتابیس و توابع قبلی (بدون تغییر) ==================
-# ... (توابع get_db_connection, init_db, add_user, is_subscribed, get_usd_price, smart_extract اینجا قرار دارند)
+async def check_membership(context: ContextTypes.DEFAULT_TYPE, user_id: int):
+    """بررسی وضعیت عضویت کاربر در کانال"""
+    try:
+        member = await context.bot.get_chat_member(chat_id=CHANNEL_ID, user_id=user_id)
+        allowed_statuses = ['member', 'administrator', 'creator']
+        return member.status in allowed_statuses
+    except Exception as e:
+        logging.error(f"Membership check error: {e}")
+        return False
 
-# ================== بخش جدید: جستجوی هوشمند محصولات (طبق مستندات) ==================
-@bot.message_handler(func=lambda m: m.text == "🔍 جستجوی محصول")
-def search_start(message):
-    if not is_subscribed(message.chat.id):
-        bot.send_message(message.chat.id, "⚠️ ابتدا عضو کانال شوید:", reply_markup=join_menu())
-        return
-    msg = bot.send_message(message.chat.id, "🔎 نام محصول یا دسته‌بندی مورد نظر را بنویسید (مثلاً: خردکن):", reply_markup=types.ReplyKeyboardRemove())
-    bot.register_next_step_handler(msg, search_results_smart)
-
-def search_results_smart(message):
-    query = message.text.strip()
-    # لینک اصلی جستجو در سایت میکسین
-    search_url = f"https://banehstoore.ir/?s={query.replace(' ', '+')}"
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """فرمان شروع ربات"""
+    user = update.effective_user
+    is_member = await check_membership(context, user.id)
     
-    # ساخت دکمه‌های شیشه‌ای شفاف (Inline Keyboard)
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    
-    # دکمه اول: لینک مستقیم به تمام نتایج در سایت
-    markup.add(types.InlineKeyboardButton(f"🌐 مشاهده همه نتایج '{query}' در سایت", url=search_url))
-    
-    # دکمه‌های پیشنهادی ستونی برای دسترسی سریع‌تر (مطابق استانداردهای میکسین)
-    # اینجا می‌توان لیستی از محصولات پرطرفدار مرتبط با کوئری را به صورت دکمه اضافه کرد
-    quick_links = [
-        {"title": f"🛍 لیست قیمت انواع {query}", "suffix": ""},
-        {"title": f"🔥 پرفروش‌ترین‌های {query}", "suffix": "&orderby=popularity"},
-        {"title": f"💰 ارزان‌ترین {query}", "suffix": "&orderby=price"},
-    ]
-    
-    for link in quick_links:
-        btn_url = search_url + link["suffix"]
-        markup.add(types.InlineKeyboardButton(link["title"], url=btn_url))
+    if is_member:
+        await update.message.reply_text(
+            f"🎉 خوش آمدید {user.first_name} عزیز!\n\n"
+            f"عضویت شما در کانال {CHANNEL_ID} تایید شده است.\n"
+            "به زودی منوی محصولات و دسته‌بندی‌های فروشگاه بانه استور در اینجا نمایش داده می‌شود."
+        )
+    else:
+        keyboard = [
+            [InlineKeyboardButton("📢 عضویت در کانال", url=f"https://t.me/banehstoore")],
+            [InlineKeyboardButton("✅ تایید عضویت", callback_data='verify_join')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            f"سلام {user.first_name}! 😊\n"
+            f"برای استفاده از خدمات ربات بانه استور، ابتدا باید در کانال ما عضو شوید:",
+            reply_markup=reply_markup
+        )
 
-    text = (f"🚀 **نتایج جستجوی هوشمند برای: {query}**\n\n"
-            f"مشتری گرامی، برای مشاهده دقیق مشخصات و قیمت محصولات، از دکمه‌های زیر استفاده کنید. نتایج به صورت مستقیم از بانه استور استخراج شده است.")
+async def button_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """مدیریت کلیک روی دکمه تایید عضویت"""
+    query = update.callback_query
+    user_id = query.from_user.id
     
-    bot.send_message(message.chat.id, text, parse_mode="Markdown", reply_markup=markup)
-    # بازگشت به منوی اصلی پس از نمایش نتایج
-    bot.send_message(message.chat.id, "🏠 برای عملیات دیگر از منوی زیر استفاده کنید:", reply_markup=main_menu(message.from_user.id))
+    await query.answer() # برای از بین بردن حالت در حال بارگذاری دکمه
 
-# ================== سایر بخش‌های کد (بدون هیچ تغییری) ==================
-# ... (تمام هندلرهای قبلی شامل admin_m, track_1, track_2, show_invoice, stats, broad_req و تنظیمات وب‌هوک)
+    if query.data == 'verify_join':
+        is_member = await check_membership(context, user_id)
+        if is_member:
+            await query.edit_message_text(
+                "✅ تایید شد! حالا می‌توانید از تمامی امکانات فروشگاه استفاده کنید.\n"
+                "برای مشاهده منو، دوباره دستور /start را بزنید."
+            )
+        else:
+            await query.answer("❌ شما هنوز عضو کانال نشده‌اید!", show_alert=True)
 
-# تابع main_menu اصلاح شده برای دکمه‌های ردیفی (بدون تغییر در منطق قبلی)
-def main_menu(user_id):
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.row("🛒 محصولات", "🔍 جستجوی محصول")
-    markup.row("📦 پیگیری سفارش", "💰 قیمت لحظه‌ای دلار")
-    markup.row("📞 پشتیبانی و تماس")
-    if user_id == ADMIN_ID: markup.row("🛠 پنل مدیریت")
-    return markup
+def main():
+    """اجرای ربات"""
+    # ساخت اپلیکیشن
+    application = Application.builder().token(TOKEN).build()
 
-# (ادامه کد وب‌هوک و Flask مشابه نسخه‌های قبل است)
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+    # هندلرها
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(button_click))
+
+    # شروع به کار ربات
+    print("--- Robot is Online (Baneh Store) ---")
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
+
+if __name__ == '__main__':
+    main()

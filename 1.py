@@ -2,15 +2,12 @@ import telebot
 from telebot import types
 import os
 import re
-import requests
 import sqlite3
 from flask import Flask, request
 
 # ================== تنظیمات اصلی ==================
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_ID = 6690559792 
-# توکن API میکسین خود را اینجا یا در متغیرهای Render قرار دهید
-MIXIN_API_KEY = os.environ.get("MIXIN_API_KEY", "YOUR_TOKEN_HERE") 
 RENDER_URL = "https://telegram-bot-6-1qt1.onrender.com" 
 CHANNEL_ID = "@banehstoore"
 WHATSAPP = "09180514202"
@@ -28,64 +25,20 @@ def get_db_connection():
 def init_db():
     conn = get_db_connection()
     conn.execute('''CREATE TABLE IF NOT EXISTS orders 
-                 (order_id TEXT PRIMARY KEY, details TEXT)''')
+                 (order_id TEXT PRIMARY KEY, 
+                  details TEXT)''')
     conn.commit()
     conn.close()
 
 init_db()
 
-# ================== توابع بخش مشتریان (Mixin API) ==================
-def fetch_mixin_customers():
-    """دریافت لیست مشتریان با آدرس اصلاح شده"""
-    # نکته: آدرس زیر را بر اساس دامنه اصلی سایت خودتان تغییر دهید
-    # اگر آدرس سایت شما مثلا banehstoore.ir است، از آن استفاده کنید
-    BASE_URL = "https://banehstoore.ir" # یا آدرسی که میکسین به شما داده
-    url = f"{BASE_URL}/api/management/v1/customers/"
-    
-    headers = {
-        'Authorization': f'Api-Key {MIXIN_API_KEY}',
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
-    }
-    
-    try:
-        # لاگ برای دیباگ در کنسول رندر
-        print(f"Requesting to: {url}")
-        
-        response = requests.get(url, headers=headers, timeout=15)
-        
-        if response.status_code == 200:
-            data = response.json()
-            # طبق مستندات تصویر ۳، نتایج در فیلد results هستند
-            customers = data.get('results', [])
-            
-            if not customers:
-                return "📭 لیست مشتریان در حال حاضر خالی است."
-            
-            report = f"👥 **لیست مشتریان (بروزرسانی شده)**\n"
-            report += "━━━━━━━━━━━━━━━\n"
-            
-            for person in customers[:10]: # نمایش ۱۰ نفر آخر
-                # نام فیلدها را بر اساس خروجی JSON (تصویر ۳) تنظیم کنید
-                name = person.get('first_name', 'کاربر')
-                last_name = person.get('last_name', '')
-                username = person.get('username', '---')
-                report += f"👤 {name} {last_name}\n🆔 @{username}\n\n"
-            
-            return report
-        elif response.status_code == 404:
-            return "❌ **خطای 404:** آدرس API پیدا نشد. لطفاً آدرس سایت (BASE_URL) را در کد چک کنید."
-        elif response.status_code == 401:
-            return "❌ **خطای 401:** توکن API معتبر نیست."
-        else:
-            return f"❌ خطا با کد: {response.status_code}"
-    except Exception as e:
-        return f"⚠️ خطای ارتباطی: {str(e)}"
-# ================== استخراج‌گر هوشمند فاکتور (حفظ شده از قبل) ==================
+# ================== استخراج‌گر هوشمند (بخش ادمین) ==================
 def smart_extract(raw_text):
     try:
         order_id_match = re.search(r'سفارش\s*[:：]?\s*(\d+)', raw_text)
-        if not order_id_match: return None, "❌ شماره سفارش پیدا نشد."
+        if not order_id_match:
+            return None, "❌ شماره سفارش در متن پیدا نشد."
+        
         order_id = order_id_match.group(1)
 
         def fetch(pattern):
@@ -96,67 +49,95 @@ def smart_extract(raw_text):
         phone = fetch(r"شماره تماس\s*[:：]\s*([\d\s]+)")
         address = fetch(r"ارسال به\s*[:：]\s*([^👤📍📞💰🚩\n]+)")
         total_price = fetch(r"مبلغ کل\s*[:：]\s*([\d٬,]+)\s*تومان")
-        status = fetch(r"وضعیت\s*[:：]\s*([^👤📍📞💰🚩\n]+)").replace("پرداخت شده", "").strip()
+        status_raw = fetch(r"وضعیت\s*[:：]\s*([^👤📍📞💰🚩\n]+)")
+        status = status_raw.replace("پرداخت شده", "").strip()
+
+        product = "نامشخص"
+        product_match = re.search(r'([^\n]*(?:سرخ کن|اسپرسو|یونی|مدل|تعداد)[^\n]*)', raw_text)
+        if product_match:
+            product = product_match.group(1).split("تعداد")[0].strip()
 
         formatted_details = (
-            f"👤 **خریدار:** {receiver}\n📞 **تماس:** {phone}\n📍 **نشانی:** {address}\n"
-            f"━━━━━━━━━━━━━━━\n💰 **مبلغ کل:** {total_price} تومان\n🚩 **وضعیت:** {status}"
+            f"👤 **خریدار:** {receiver}\n"
+            f"📞 **تماس:** <code>{phone}</code>\n"
+            f"📍 **نشانی:** {address}\n"
+            f"━━━━━━━━━━━━━━━\n"
+            f"🛒 **محصول:** {product}\n"
+            f"💰 **مبلغ کل:** {total_price} تومان\n"
+            f"🚩 **وضعیت:** {status}\n"
+            f"💳 **وضعیت پرداخت:** تایید شده"
         )
-        
+
         conn = get_db_connection()
         conn.execute("INSERT OR REPLACE INTO orders (order_id, details) VALUES (?, ?)", (order_id, formatted_details))
         conn.commit()
         conn.close()
+        
         return order_id, formatted_details
-    except Exception as e: return None, f"⚠️ خطا: {str(e)}"
+    except Exception as e:
+        return None, f"⚠️ خطای تحلیل متن: {str(e)}"
 
-# ================== منوها و هندلرها ==================
+# ================== هندلرها و منوها ==================
 def main_menu(user_id):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.row("🛒 محصولات", "🔍 جستجوی محصول")
     markup.row("📦 پیگیری سفارش", "📞 پشتیبانی و تماس")
     if user_id == ADMIN_ID:
         markup.row("📥 ثبت سریع فاکتور (ادمین)")
-        markup.row("👥 لیست مشتریان (Mixin)") # دکمه جدید
     return markup
 
 @bot.message_handler(commands=['start'])
 def start(message):
-    bot.send_message(message.chat.id, "👋 خوش آمدید", reply_markup=main_menu(message.from_user.id))
+    bot.send_message(message.chat.id, "👋 به ربات بانه استور خوش آمدید.", reply_markup=main_menu(message.from_user.id))
 
-# --- هندلر لیست مشتریان ---
-@bot.message_handler(func=lambda m: m.text == "👥 لیست مشتریان (Mixin)" and m.from_user.id == ADMIN_ID)
-def show_mixin_customers(message):
-    bot.send_message(message.chat.id, "⏳ در حال استعلام از پنل میکسین...")
-    result = fetch_mixin_customers()
-    bot.send_message(message.chat.id, result, parse_mode="Markdown")
-
-# --- سایر هندلرها (حفظ شده) ---
+# --- بخش ادمین ---
 @bot.message_handler(func=lambda m: m.text == "📥 ثبت سریع فاکتور (ادمین)" and m.from_user.id == ADMIN_ID)
-def start_capture(message):
-    msg = bot.send_message(message.chat.id, "📑 متن کپی شده از سایت را اینجا بفرستید:")
-    bot.register_next_step_handler(msg, process_capture)
+def admin_capture(message):
+    msg = bot.send_message(message.chat.id, "📑 متن کپی شده از سایت را بفرستید:")
+    bot.register_next_step_handler(msg, process_admin_text)
 
-def process_capture(message):
+def process_admin_text(message):
     oid, res = smart_extract(message.text)
-    bot.send_message(message.chat.id, f"✅ فاکتور {oid} ذخیره شد:\n\n{res}" if oid else res, parse_mode="Markdown")
-
-@bot.message_handler(func=lambda m: m.text == "📦 پیگیری سفارش")
-def track(message):
-    msg = bot.send_message(message.chat.id, "🔢 شماره سفارش را وارد کنید:", reply_markup=types.ReplyKeyboardRemove())
-    bot.register_next_step_handler(msg, show_invoice)
-
-def show_invoice(message):
-    oid = message.text.strip()
-    conn = get_db_connection()
-    row = conn.execute("SELECT details FROM orders WHERE order_id = ?", (oid,)).fetchone()
-    conn.close()
-    if row:
-        bot.send_message(message.chat.id, f"📑 **فاکتور {oid}**\n\n{row['details']}", parse_mode="Markdown", reply_markup=main_menu(message.from_user.id))
+    if oid:
+        bot.send_message(message.chat.id, f"✅ فاکتور شماره {oid} ذخیره شد:\n\n{res}", parse_mode="Markdown")
     else:
-        bot.send_message(message.chat.id, "❌ یافت نشد.", reply_markup=main_menu(message.from_user.id))
+        bot.send_message(message.chat.id, res)
 
-# وب‌هوک
+# --- بخش پیگیری سفارش (اصلاح شده: درخواست شماره تماس) ---
+@bot.message_handler(func=lambda m: m.text == "📦 پیگیری سفارش")
+def track_step_1(message):
+    msg = bot.send_message(message.chat.id, "📞 لطفاً شماره تلفنی که با آن ثبت‌نام کرده‌اید را وارد کنید:", reply_markup=types.ReplyKeyboardRemove())
+    bot.register_next_step_handler(msg, track_step_2)
+
+def track_step_2(message):
+    user_phone = message.text.strip()
+    msg = bot.send_message(message.chat.id, f"🔢 شماره تلفن {user_phone} ثبت شد. حالا شماره سفارش خود را وارد کنید:")
+    bot.register_next_step_handler(msg, show_final_invoice, user_phone)
+
+def show_final_invoice(message, user_phone):
+    order_id = message.text.strip()
+    conn = get_db_connection()
+    row = conn.execute("SELECT details FROM orders WHERE order_id = ?", (order_id,)).fetchone()
+    conn.close()
+
+    if row:
+        # اینجا می‌توان چک کرد که آیا شماره تلفن در متن فاکتور هست یا خیر (اختیاری)
+        bot.send_message(message.chat.id, f"📑 **فاکتور شماره {order_id}**\n\n{row['details']}\n\n✅ بانه استور", 
+                         parse_mode="Markdown", reply_markup=main_menu(message.from_user.id))
+    else:
+        bot.send_message(message.chat.id, "❌ فاکتوری با این شماره یافت نشد.", reply_markup=main_menu(message.from_user.id))
+
+# --- سایر دکمه‌ها ---
+@bot.message_handler(func=lambda m: m.text == "🛒 محصولات")
+def products(m):
+    bot.send_message(m.chat.id, "🛒 لیست محصولات در سایت:\nhttps://banehstoore.ir/products")
+
+@bot.message_handler(func=lambda m: m.text == "📞 پشتیبانی و تماس")
+def support(m):
+    text = f"📞 شماره تماس: {PHONE_NUMBER}\n💬 واتساپ: {WHATSAPP}\n📢 کانال: {CHANNEL_ID}"
+    bot.send_message(m.chat.id, text)
+
+# ================== اجرای وب‌هوک ==================
 @app.route('/' + BOT_TOKEN, methods=['POST'])
 def getMessage():
     bot.process_new_updates([telebot.types.Update.de_json(request.get_data().decode('utf-8'))])
@@ -165,7 +146,7 @@ def getMessage():
 @app.route("/")
 def webhook():
     bot.remove_webhook(); bot.set_webhook(url=RENDER_URL + '/' + BOT_TOKEN)
-    return "<h1>Bot is Active with Mixin API</h1>", 200
+    return "<h1>Baneh Store Bot: Active</h1>", 200
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
